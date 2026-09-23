@@ -1,6 +1,6 @@
 /* PERLA NOTTE RDG — service worker
    Aplikacija radi i bez interneta; podaci ostaju u localStorage preglednika. */
-var VERZIJA = 'pn-rdg-v137';
+var VERZIJA = 'pn-rdg-v138';
 
 var JEZGRA = [
   './',
@@ -51,6 +51,14 @@ self.addEventListener('fetch', function (e) {
   var req = e.request;
   if (req.method !== 'GET') return;
   var url = new URL(req.url);
+
+  // VAZNO: sve sto nije ova aplikacija ili unaprijed popisana knjiznica
+  // ide ravno na mrezu, bez spremnika. Bez ovoga bi se spremio i odgovor
+  // Supabasea, pa bi aplikacija zauvijek citala staro stanje iz memorije
+  // i sinkronizacija izmedu racunala i mobitela ne bi radila.
+  var jeNase = (url.origin === self.location.origin);
+  var jeKnjiznica = KNJIZNICE.indexOf(url.href.split('?')[0]) >= 0;
+  if (!jeNase && !jeKnjiznica) return;
 
   // HTML: prvo mreza (da se azuriranje odmah vidi), pa spremnik ako nema veze
   var jeHtml = req.mode === 'navigate' || /\.html?$/.test(url.pathname);

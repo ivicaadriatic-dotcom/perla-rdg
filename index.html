@@ -1021,6 +1021,15 @@ body.mob .tab-pane .sec-title:first-child{font-size:30px!important}
 .izv-djel select{width:100%;height:38px;border:none;border-radius:10px;background:var(--fill);color:var(--label);font-family:var(--font);font-size:14px;padding:0 10px}
 
 /* ── Nadzorna ploča: raspored po uzoru na Perla Notte HACCP ── */
+.sb-chip{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 11px;border-radius:10px;border:none;
+  background:var(--fill);color:var(--label3);font-family:inherit;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;max-width:190px;overflow:hidden}
+.sb-chip:hover{color:var(--label)}
+.sb-dot{width:7px;height:7px;border-radius:50%;background:#8e8e93;flex:0 0 7px}
+.sb-chip.ok .sb-dot{background:#34c759}
+.sb-chip.rad .sb-dot{background:#ff9500}
+.sb-chip.err .sb-dot{background:#ff3b30}
+.sb-chip.err{color:var(--red)}
+body.mob .sb-chip{display:none!important}
 .hd-cap{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--label3);margin:2px 0 9px}
 .hd-status{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:20px}
 @media (max-width:1500px){ .hd-status{grid-template-columns:repeat(2,minmax(0,1fr))} }
@@ -1220,6 +1229,7 @@ body.mob .mob-brand{gap:0}
     <button class="hbtn" onclick="izvoziPokreni('xlsx','ova')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg><span class="txt">Excel</span></button>
     <button class="hbtn" onclick="izvoziPokreni('pdf','ova')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg><span class="txt">PDF</span></button>
     <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()"><span id="themeIcon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span><span id="themeLabel">Tamna</span></button>
+    <button type="button" id="sbChip" class="sb-chip" onclick="sbChipKlik()" style="display:none" title="Sinkronizacija u oblaku"><span class="sb-dot"></span><span id="sbStatusMini">—</span></button>
     <span id="saveStatus" style="display:none">&#9675; nije spremljeno</span>
   </div>
 </div>
@@ -6603,13 +6613,29 @@ var SB = (function(){
 })();
 var SB_KLJUCEVI = (typeof PN_BACKUP_KEYS!=='undefined' ? PN_BACKUP_KEYS : []).concat(['pn_daily','pn_cf_rucno','pn_p','pn_izvod_migracija_1','pn_rate_ocisti_1']);
 var SB_LOK = (function(){ try { return JSON.parse(localStorage.getItem('pn_sync_lok')||'{}'); } catch(e){ return {}; } })();
+// SB_LOK  = kada je koji podatak zadnji put promijenjen na ovom uredaju (za rjesavanje sukoba)
+// SB_CEKA = sto jos nije uspjesno poslano u oblak. Bez toga bi uredaj pri svakom
+//           slanju ponovno slao cijelo svoje stanje i time mogao pregaziti noviji
+//           zapis s drugog uredaja.
+var SB_CEKA = (function(){ try { return JSON.parse(localStorage.getItem('pn_sync_ceka')||'{}'); } catch(e){ return {}; } })();
+function sbSpremiCeka(){ try { localStorage.setItem('pn_sync_ceka', JSON.stringify(SB_CEKA)); } catch(e){} }
+// Jednokratno pri prelasku na novi nacin: sve sto je uredaj dosad biljezio
+// prebaci u red za slanje, da se nista nedovrseno ne izgubi.
+(function(){
+  try {
+    if (localStorage.getItem('pn_sync_ceka_1')) return;
+    for (var k in SB_LOK) SB_CEKA[k]=1;
+    sbSpremiCeka();
+    localStorage.setItem('pn_sync_ceka_1','1');
+  } catch(e){}
+})();
 var SB_POSAO = null, SB_ZADNJI = '';
 
 function sbSpremiPostavke(){ try { localStorage.setItem('pn_sb', JSON.stringify(SB)); } catch(e){} }
 function sbUkljucen(){ return !!(SB.url && SB.kljuc && SB.token); }
 function pnSyncKljuc(k){
   if (!k || k.indexOf('pn_')!==0) return false;
-  if (k==='pn_sync_lok' || k==='pn_sb') return false;
+  if (k==='pn_sync_lok' || k==='pn_sync_ceka' || k==='pn_sb') return false;
   for (var i=0;i<SB_KLJUCEVI.length;i++) {
     var sk=SB_KLJUCEVI[i];
     if (k===sk) return true;
@@ -6619,7 +6645,9 @@ function pnSyncKljuc(k){
 }
 function pnSyncOznaci(k){
   SB_LOK[k]=new Date().toISOString();
+  SB_CEKA[k]=1;
   try { localStorage.setItem('pn_sync_lok', JSON.stringify(SB_LOK)); } catch(e){}
+  sbSpremiCeka();
   if (SB.auto && sbUkljucen()) sbZakaziSlanje();
 }
 // Svaka izmjena u localStorage automatski se biljezi za sinkronizaciju
@@ -6633,12 +6661,34 @@ function pnSyncOznaci(k){
   } catch(e){}
 })();
 
+var SB_ZADNJA_OK = 0;      // vrijeme zadnje uspjesne razmjene s oblakom
+var SB_VRSTA = '';
 function sbStatus(txt, vrsta){
   SB_ZADNJI = txt||'';
+  SB_VRSTA = vrsta||'';
+  if (vrsta==='ok') SB_ZADNJA_OK = Date.now();
   var el=document.getElementById('sbStatus');
   if (el) { el.textContent=txt||''; el.style.color = vrsta==='err' ? 'var(--red)' : (vrsta==='ok' ? 'var(--green)' : 'var(--label3)'); }
-  var el2=document.getElementById('sbStatusMini');
-  if (el2) el2.textContent = txt||'';
+  sbChipOsvjezi();
+}
+// Mali pokazatelj u zaglavlju — da se odmah vidi radi li sinkronizacija
+function sbChipOsvjezi(){
+  var chip=document.getElementById('sbChip'), txt=document.getElementById('sbStatusMini');
+  if (!chip||!txt) return;
+  if (!sbUkljucen()) { chip.style.display='none'; return; }
+  chip.style.display='inline-flex';
+  chip.className='sb-chip';
+  if (SB_VRSTA==='err') { chip.classList.add('err'); txt.textContent='Sinkronizacija ne radi'; return; }
+  if (/Povla\u010dim|\u0160aljem|Prijava/.test(SB_ZADNJI)) { chip.classList.add('rad'); txt.textContent='Sinkroniziram\u2026'; return; }
+  if (SB_ZADNJA_OK) {
+    chip.classList.add('ok');
+    var t=new Date(SB_ZADNJA_OK);
+    txt.textContent='Usklađeno '+('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2);
+  } else txt.textContent='Spremno';
+}
+function sbChipKlik(){
+  if (SB_VRSTA==='err') { sbSinkronizirajSada(); return; }
+  if (typeof switchTab==='function') switchTab('postavke');
 }
 function sbZaglavlja(sJson){
   var h={'apikey':SB.kljuc, 'Authorization':'Bearer '+SB.token};
@@ -6697,9 +6747,9 @@ function sbOznaciSve(){
     for (var i=0;i<localStorage.length;i++) {
       var k=localStorage.key(i);
       if (!pnSyncKljuc(k) || SB_LOK[k]) continue;
-      SB_LOK[k]=new Date().toISOString(); n++;
+      SB_LOK[k]=new Date().toISOString(); SB_CEKA[k]=1; n++;
     }
-    if (n) localStorage.setItem('pn_sync_lok', JSON.stringify(SB_LOK));
+    if (n) { localStorage.setItem('pn_sync_lok', JSON.stringify(SB_LOK)); sbSpremiCeka(); }
   } catch(e){}
   return n;
 }
@@ -6709,13 +6759,14 @@ function sbZakaziSlanje(){
 }
 function sbPosalji(tiho){
   return sbSpreman().then(function(){
-    var redovi=[];
-    for (var k in SB_LOK) {
+    var redovi=[], poslani=[];
+    for (var k in SB_CEKA) {
       if (!pnSyncKljuc(k)) continue;
       var v=null; try { v=localStorage.getItem(k); } catch(e){}
-      redovi.push({kljuc:k, vrijednost:(v===null?'':v), azurirano:SB_LOK[k]});
+      redovi.push({kljuc:k, vrijednost:(v===null?'':v), azurirano:SB_LOK[k]||new Date().toISOString()});
+      poslani.push(k);
     }
-    if (!redovi.length) { if(!tiho) sbStatus('Nema promjena za slanje.'); return; }
+    if (!redovi.length) { if(!tiho) sbStatus('Sve je već poslano u oblak.','ok'); return; }
     if (!tiho) sbStatus('Šaljem '+redovi.length+' zapisa…');
     return fetch(SB.url+'/rest/v1/rdg_stanje?on_conflict=korisnik,kljuc', {
       method:'POST',
@@ -6723,6 +6774,8 @@ function sbPosalji(tiho){
       body:JSON.stringify(redovi)
     }).then(function(r){
       if (!r.ok) return r.text().then(function(t){ throw new Error(t.slice(0,180)); });
+      for (var i=0;i<poslani.length;i++) delete SB_CEKA[poslani[i]];
+      sbSpremiCeka();
       sbStatus('Spremljeno u oblak · '+new Date().toLocaleTimeString('hr-HR'),'ok');
     });
   }).catch(function(e){ sbStatus('Slanje nije uspjelo: '+e.message,'err'); });
@@ -6765,12 +6818,16 @@ function sbPovuci(tiho){
       // Inace: noviji zapis pobjeđuje; kod jednakog vremena ostaje lokalni
       if (lok && new Date(lok)>=new Date(x.azurirano)) return;
       try {
-        if (x.vrijednost==null || x.vrijednost==='') localStorage.removeItem(x.kljuc);
+        var stara=null; try { stara=localStorage.getItem(x.kljuc); } catch(e2){}
+        var nova=(x.vrijednost==null?'':x.vrijednost);
+        if (stara===nova || (stara===null && nova==='')) { SB_LOK[x.kljuc]=x.azurirano; delete SB_CEKA[x.kljuc]; return; }
+        if (nova==='') localStorage.removeItem(x.kljuc);
         else localStorage.setItem(x.kljuc, x.vrijednost);
-        SB_LOK[x.kljuc]=x.azurirano; promjena++;
+        SB_LOK[x.kljuc]=x.azurirano; delete SB_CEKA[x.kljuc]; promjena++;
       } catch(e){}
     });
     try { localStorage.setItem('pn_sync_lok', JSON.stringify(SB_LOK)); } catch(e){}
+    sbSpremiCeka();
     if (promjena) {
       sbStatus(promjena+' zapisa povučeno — osvježavam prikaz…','ok');
       setTimeout(function(){ location.reload(); }, 800);
@@ -6858,12 +6915,40 @@ function sbPanelHtml(){
   h+='</div></section>';
   return h;
 }
+var SB_ZADNJE_POVL = 0;
+// Je li korisnik usred unosa — tada se ne osvjezava da mu se ne prekine rad
+function sbZauzet(){
+  try {
+    var a=document.activeElement;
+    if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return true;
+    if (document.querySelector('.pnd-w, .rsf-w.open, .pst-modal.open')) return true;
+  } catch(e){}
+  return false;
+}
+// Povuci ako je proslo dovoljno vremena od zadnjeg puta
+function sbOsvjeziAko(razmakMs){
+  if (!sbUkljucen() || !SB.auto) return;
+  if (document.hidden) return;
+  if (Date.now()-SB_ZADNJE_POVL < (razmakMs||20000)) return;
+  if (sbZauzet()) return;
+  SB_ZADNJE_POVL=Date.now();
+  try {
+    sbPovuci(true).then(function(){
+      // posalji i sve sto je ostalo nezavrseno (npr. promjene nastale bez veze)
+      var ima=false; for (var k in SB_CEKA) { ima=true; break; }
+      if (ima) sbPosalji(true);
+    });
+  } catch(e){}
+}
 // Pri pokretanju: ako je uredjaj prijavljen, povuci sto je novije u oblaku
 (function(){
-  setTimeout(function(){
-    if (!sbUkljucen() || !SB.auto) return;
-    try { sbPovuci(true); } catch(e){}
-  }, 1800);
+  setTimeout(function(){ SB_ZADNJE_POVL=Date.now(); if (sbUkljucen() && SB.auto) { try { sbPovuci(true).then(function(){ sbPosalji(true); }); } catch(e){} } sbChipOsvjezi(); }, 1800);
+  // Povratak u aplikaciju (mobitel iz pozadine, prebacivanje kartica, povratak fokusa)
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) sbOsvjeziAko(20000); });
+  window.addEventListener('focus', function(){ sbOsvjeziAko(20000); });
+  window.addEventListener('online', function(){ sbOsvjeziAko(0); });
+  // Povremeno dok je aplikacija otvorena
+  setInterval(function(){ sbOsvjeziAko(110000); }, 60000);
 })();
 
 function izvozKompletanBackup() {
