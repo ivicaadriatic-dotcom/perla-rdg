@@ -1021,6 +1021,17 @@ body.mob .tab-pane .sec-title:first-child{font-size:30px!important}
 .izv-djel select{width:100%;height:38px;border:none;border-radius:10px;background:var(--fill);color:var(--label);font-family:var(--font);font-size:14px;padding:0 10px}
 
 /* ── Nadzorna ploča: raspored po uzoru na Perla Notte HACCP ── */
+.sb-izv{margin-top:10px;border:.5px solid var(--sep);border-radius:12px;overflow:hidden}
+.sb-izv-r{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;
+  padding:7px 11px;font-size:12px;border-bottom:.5px solid var(--sep)}
+.sb-izv-r:last-child{border-bottom:none}
+.sb-izv-t{color:var(--label);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-izv-s{font-size:11px;font-weight:600;white-space:nowrap}
+.sb-izv-v{font-size:11px;color:var(--label4);white-space:nowrap;font-variant-numeric:tabular-nums}
+.sb-izv-r.ok .sb-izv-s{color:var(--green)}
+.sb-izv-r.warn .sb-izv-s{color:#ff9500}
+.sb-izv-r.bad .sb-izv-s{color:var(--red)}
+.sb-izv-nap{margin-top:8px;font-size:11.5px;color:var(--label3)}
 .sb-chip{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 11px;border-radius:10px;border:none;
   background:var(--fill);color:var(--label3);font-family:inherit;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;max-width:190px;overflow:hidden}
 .sb-chip:hover{color:var(--label)}
@@ -6815,6 +6826,11 @@ function sbPovuci(tiho){
       // Uredaj bez sadrzaja, ili kljuc koji je aplikacija sama stvorila pri
       // pokretanju — to nije korisnikov rad, pa oblak pobjeduje.
       if (SB_PRAZNO || !PN_KLJ_POC[x.kljuc]) lok='';
+      // Ako na ovom uredaju za taj podatak nema promjene koja jos ceka slanje,
+      // lokalna kopija je samo preslika zadnje sinkronizacije — oblak je
+      // mjerodavan. Bez ovoga bi razlika u satu dvaju uredaja trajno blokirala
+      // preuzimanje (uredaj s naprijed pomaknutim satom odbijao bi tude novije zapise).
+      if (!SB_CEKA[x.kljuc]) lok='';
       // Inace: noviji zapis pobjeđuje; kod jednakog vremena ostaje lokalni
       if (lok && new Date(lok)>=new Date(x.azurirano)) return;
       try {
@@ -6835,6 +6851,103 @@ function sbPovuci(tiho){
       sbStatus('Sve je već usklađeno · '+new Date().toLocaleTimeString('hr-HR'),'ok');
     }
   }).catch(function(e){ sbStatus('Povlačenje nije uspjelo: '+e.message,'err'); });
+}
+// Razumljivi nazivi podataka za izvjestaj
+var SB_NAZIVI={
+  'pn_td':'Transakcije (svi ulazni i izlazni racuni)',
+  'pn_p_full':'Iznosi po rubrikama (RDG)',
+  'pn_p':'Iznosi po rubrikama (kopija)',
+  'pn_rows':'Popis rubrika',
+  'pn_custom_map':'Vlastite rubrike',
+  'pn_settings':'Postavke tvrtke',
+  'pn_logo':'Logo',
+  'pn_daily':'Prodaja po danima',
+  'pn_daily_artikli':'Prodaja po artiklima',
+  'pn_daily_artikli_ap':'Prodaja po aparatima',
+  'pn_aparati':'Popis vending aparata',
+  'pn_aparat_akt':'Odabrani aparat',
+  'pn_djel_sati':'Radni sati djelatnika',
+  'pn_zaposlenici':'Popis zaposlenika',
+  'pn_zaposlenici_info':'Podaci o zaposlenicima',
+  'pn_rules':'Pravila knjizenja',
+  'pn_izvod_potpisi':'Potpisi izvoda',
+  'pn_cf_rucno':'Rucne korekcije novcanog tijeka'
+};
+function sbNaziv(k){
+  if (SB_NAZIVI[k]) return SB_NAZIVI[k];
+  if (k.indexOf('pn_cf_bal_')===0) return 'Stanje ra\u010duna '+k.substring(10);
+  return k;
+}
+// Unutarnje oznake aplikacije — ne prikazuju se u izvjestaju
+function sbTehnicki(k){
+  return /^pn_(izvod_migracija|rate_migracija|rate_ocisti|sati_vremena_fix|sync_ceka|rn_sync|korekcija_)/.test(k);
+}
+// Usporedi SVE podatke s oblakom i pokazi gdje se razlikuju
+function sbProvjeriOblak(){
+  var el=document.getElementById('sbIzvjestaj');
+  if (el) el.innerHTML='<div class="sb-izv-nap">Provjeravam\u2026</div>';
+  sbSpreman().then(function(){
+    return fetch(SB.url+'/rest/v1/rdg_stanje?select=kljuc,vrijednost,azurirano', {headers:sbZaglavlja()});
+  }).then(function(r){
+    if (!r.ok) return r.text().then(function(t){ throw new Error(t.slice(0,160)); });
+    return r.json();
+  }).then(function(redovi){
+    var oblak={}; (redovi||[]).forEach(function(x){ if (pnSyncKljuc(x.kljuc) && !sbTehnicki(x.kljuc)) oblak[x.kljuc]=x; });
+    var svi={}, k;
+    for (k in oblak) svi[k]=1;
+    try { for (var i=0;i<localStorage.length;i++){ var lk=localStorage.key(i); if (pnSyncKljuc(lk) && !sbTehnicki(lk)) svi[lk]=1; } } catch(e){}
+    var popis=Object.keys(svi).sort(function(a,b){ return sbNaziv(a).localeCompare(sbNaziv(b),'hr'); });
+    var razlika=0, cekaju=0;
+    var h='<div class="sb-izv">';
+    popis.forEach(function(kl){
+      var lokV=null; try { lokV=localStorage.getItem(kl); } catch(e){}
+      var obl=oblak[kl];
+      var st,kls;
+      if (!obl) { st='samo na ovom ure\u0111aju'; kls='warn'; razlika++; }
+      else if (lokV===null) { st='samo u oblaku'; kls='warn'; razlika++; }
+      else if (lokV===obl.vrijednost) { st='usklađeno'; kls='ok'; }
+      else { st='razlikuje se'; kls='bad'; razlika++; }
+      if (SB_CEKA[kl]) { st+=' \u00b7 čeka slanje'; cekaju++; }
+      var vr = obl ? new Date(obl.azurirano) : null;
+      var vrT = vr ? (('0'+vr.getDate()).slice(-2)+'.'+('0'+(vr.getMonth()+1)).slice(-2)+'. '+('0'+vr.getHours()).slice(-2)+':'+('0'+vr.getMinutes()).slice(-2)) : '\u2014';
+      h+='<div class="sb-izv-r '+kls+'"><span class="sb-izv-t">'+sbNaziv(kl)+'</span>'+
+         '<span class="sb-izv-s">'+st+'</span><span class="sb-izv-v">'+vrT+'</span></div>';
+    });
+    h+='</div>';
+    h+='<div class="sb-izv-nap">'+(razlika? (razlika+' od '+popis.length+' vrsta podataka nije jednako.') : 'Svih '+popis.length+' vrsta podataka je jednako na uređaju i u oblaku.')+
+       (cekaju? (' '+cekaju+' čeka slanje.') : '')+'</div>';
+    h+='<div class="pst-row-a" style="margin-top:8px">'+
+       '<button type="button" class="pst-btn ghost" onclick="sbUzmiSve()">Uzmi sve iz oblaka</button>'+
+       '<button type="button" class="pst-btn ghost" onclick="sbPosaljiSve()">Pošalji sve u oblak</button></div>';
+    var el2=document.getElementById('sbIzvjestaj'); if (el2) el2.innerHTML=h;
+  }).catch(function(e){
+    var el2=document.getElementById('sbIzvjestaj');
+    if (el2) el2.innerHTML='<div class="sb-izv-nap" style="color:var(--red)">Provjera nije uspjela: '+e.message+'</div>';
+  });
+}
+// Prisilno: uzmi sve iz oblaka (oblak pobjeduje za sve)
+function sbUzmiSve(){
+  pnConfirm('Sve podatke s ovog uređaja zamijeniti onima iz oblaka?\n\nOno što je na uređaju novije, a još nije poslano, bit će izgubljeno.',
+    {title:'Uzmi sve iz oblaka', ok:'Uzmi iz oblaka'}).then(function(da){
+      if (!da) return;
+      SB_LOK={}; SB_CEKA={};
+      try { localStorage.setItem('pn_sync_lok','{}'); } catch(e){}
+      sbSpremiCeka();
+      sbPovuci(false);
+    });
+}
+// Prisilno: posalji sve s ovog uredaja u oblak
+function sbPosaljiSve(){
+  pnConfirm('Poslati sve podatke s ovog uređaja u oblak?\n\nOno što je u oblaku bit će zamijenjeno stanjem s ovog uređaja.',
+    {title:'Pošalji sve u oblak', ok:'Pošalji'}).then(function(da){
+      if (!da) return;
+      try {
+        for (var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); if (pnSyncKljuc(k)) { SB_LOK[k]=new Date().toISOString(); SB_CEKA[k]=1; } }
+        localStorage.setItem('pn_sync_lok', JSON.stringify(SB_LOK));
+      } catch(e){}
+      sbSpremiCeka();
+      sbPosalji(false).then(function(){ sbProvjeriOblak(); });
+    });
 }
 function sbSinkronizirajSada(){
   sbPovuci(false).then(function(){ sbOznaciSve(); return sbPosalji(false); });
@@ -6909,7 +7022,9 @@ function sbPanelHtml(){
        '<div class="pst-row-d">Promjene se šalju same nekoliko sekundi nakon spremanja. Pri otvaranju aplikacije podaci se povuku iz oblaka.</div>'+
        '<label class="pst-chk"><input type="checkbox" id="sbAuto"'+(SB.auto?' checked':'')+' onchange="sbPostaviPolja()"> Automatski šalji promjene</label>'+
        '<div class="pst-row-a"><button type="button" class="pst-btn pri" onclick="sbSinkronizirajSada()">'+PST_ICO.db+'<span>Sinkroniziraj sada</span></button>'+
+       '<button type="button" class="pst-btn ghost" onclick="sbProvjeriOblak()">'+PST_ICO.db+'<span>Provjeri sve podatke</span></button>'+
        '<button type="button" class="pst-btn ghost" onclick="sbOdjava()">'+PST_ICO.trash+'<span>Odjavi se</span></button></div>'+
+       '<div id="sbIzvjestaj"></div>'+
        '</div></div>';
   }
   h+='</div></section>';
