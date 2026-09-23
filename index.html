@@ -501,7 +501,9 @@ button,input,select,textarea{font-family:var(--font)}
 html[data-theme="dark"] #view{background:
   radial-gradient(900px 500px at 12% -10%,rgba(10,132,255,.12),transparent 60%),
   radial-gradient(800px 500px at 100% 0%,rgba(191,90,242,.08),transparent 60%),var(--bg)}
-.content{max-width:1400px;margin:0 auto}
+.content{max-width:none;margin:0}
+#view{padding-left:18px;padding-right:18px}
+@media (max-width:900px){ #view{padding-left:14px;padding-right:14px} }
 
 /* Bocna traka */
 #side{font-family:var(--font)}
@@ -1020,7 +1022,9 @@ body.mob .tab-pane .sec-title:first-child{font-size:30px!important}
 
 /* ── Nadzorna ploča: raspored po uzoru na Perla Notte HACCP ── */
 .hd-cap{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--label3);margin:2px 0 9px}
-.hd-status{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:11px;margin-bottom:20px}
+.hd-status{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:20px}
+@media (max-width:1500px){ .hd-status{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@media (max-width:560px){ .hd-status{grid-template-columns:minmax(0,1fr)} }
 .hd-card{display:flex;align-items:center;gap:12px;width:100%;text-align:left;cursor:pointer;font-family:inherit;
   background:var(--surface);border:.5px solid var(--sep);border-radius:16px;padding:13px 14px;transition:transform .12s,box-shadow .15s,border-color .15s}
 .hd-card:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,0,0,.07);border-color:var(--sep2)}
@@ -1037,10 +1041,24 @@ body.mob .tab-pane .sec-title:first-child{font-size:30px!important}
 .hd-badge.bad{background:var(--red-bg);color:var(--red)}
 .hd-chev{color:var(--label4);display:flex;flex:0 0 15px}
 
-.hd-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:11px;margin-bottom:20px}
+.hd-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}
+@media (max-width:1400px){ .hd-kpis{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@media (max-width:560px){ .hd-kpis{grid-template-columns:minmax(0,1fr)} }
 .hd-kpi{background:var(--surface);border:.5px solid var(--sep);border-radius:16px;padding:15px 16px}
 .hd-kl{font-size:11px;color:var(--label3);margin-bottom:3px}
-.hd-kv{font-size:24px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.15}
+.hd-kv{font-size:29px;font-weight:700;letter-spacing:-.025em;font-variant-numeric:tabular-nums;line-height:1.15}
+.hd-kpi{padding:17px 19px}
+/* Traka dospjelih obveza (kao na DYS nadzornoj plo\u010di) */
+.hd-alarm{display:flex;align-items:center;gap:13px;margin-bottom:18px;padding:13px 16px;border-radius:14px;
+  background:var(--red-bg);border:.5px solid rgba(255,59,48,.35)}
+.hd-alarm .hd-al-ico{width:30px;height:30px;border-radius:9px;flex:0 0 30px;display:inline-flex;align-items:center;
+  justify-content:center;background:#ff3b30;color:#fff}
+.hd-alarm .hd-al-txt{flex:1;min-width:0}
+.hd-alarm .hd-al-t{font-size:13px;font-weight:650;color:var(--label)}
+.hd-alarm .hd-al-s{font-size:11.5px;color:var(--label3);margin-top:2px}
+.hd-alarm button{height:29px;padding:0 15px;border-radius:9px;border:.5px solid var(--sep2);background:var(--surface);
+  color:var(--label);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.hd-alarm button:hover{border-color:#ff3b30;color:#ff3b30}
 .hd-kv em{font-style:normal;font-size:11px;font-weight:500;color:var(--label4);margin-left:2px}
 .hd-kn{font-size:11px;color:var(--label3);margin-top:4px}
 
@@ -1607,7 +1625,8 @@ function buildCharts() {
     options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'top',labels:{font:cf(),boxWidth:12}},tooltip:makeTooltip()}, scales:{x:{ticks:{font:cf()}},y:makeYAxis()}}
   });
 
-  if (chartP) chartP.destroy();
+  if (chartP) { chartP.destroy(); chartP=null; }
+  if (document.getElementById('cP'))
   chartP = new Chart(document.getElementById('cP'), {
     type:'bar',
     data:{labels:MONTHS, datasets:[
@@ -1616,7 +1635,8 @@ function buildCharts() {
     options:baseOpt
   });
 
-  if (chartR) chartR.destroy();
+  if (chartR) { chartR.destroy(); chartR=null; }
+  if (document.getElementById('cR'))
   chartR = new Chart(document.getElementById('cR'), {
     type:'bar',
     data:{labels:MONTHS, datasets:[
@@ -1736,7 +1756,8 @@ function hdSvg(n, s){
     bank:'<path d="M3 21h18M5 21V10M19 21V10M3 10l9-6 9 6"/>',
     chart:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     check:'<path d="M20 6L9 17l-5-5"/>',
-    box:'<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/>'
+    box:'<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/>',
+    percent:'<path d="M19 5L5 19"/><circle cx="7.5" cy="7.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>'
   };
   return '<svg width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+(P[n]||P.chart)+'</svg>';
 }
@@ -1747,6 +1768,18 @@ function hdKartica(o){
     '<span class="hd-badge '+o.stanje+'">'+o.oznaka+'</span>'+
     '<span class="hd-chev"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></span>'+
     '</button>';
+}
+// Traka s dospjelim obvezama — prikazuje se samo kad nešto kasni
+function hdAlarmHtml(){
+  var dosp=[]; try { dosp=(typeof getDospijeca==='function')?getDospijeca():[]; } catch(e){}
+  if (!dosp.length) return '';
+  var izn=0; dosp.forEach(function(it){ izn+=(pnImaRate(it.r)?pnOstatak(it.r):(parseFloat(it.r.iznos)||0)); });
+  var d=new Date();
+  var dat=('0'+d.getDate()).slice(-2)+'.'+('0'+(d.getMonth()+1)).slice(-2)+'.'+d.getFullYear()+'.';
+  return '<div class="hd-alarm"><span class="hd-al-ico">'+hdSvg('clock',16)+'</span>'+
+    '<div class="hd-al-txt"><div class="hd-al-t">Dospije\u0107a na dan '+dat+'</div>'+
+    '<div class="hd-al-s"><b>'+dosp.length+'</b> stavki je u ka\u0161njenju ('+fmt2(izn)+' EUR).</div></div>'+
+    '<button onclick="switchTab(\'dospijeca\')">Otvori</button></div>';
 }
 function hdKpi(o){
   return '<div class="hd-kpi"><span class="hd-ico sm" style="background:'+o.boja+'">'+hdSvg(o.ikona,16)+'</span>'+
@@ -1827,6 +1860,7 @@ function refreshKPI(c26) {
   var _f=(typeof pFilt==='function')?pFilt:function(a){return a;};
   var p26=sumA(_f(c26.prihodi)), r26=sumA(_f(c26.rashodi)), d26=sumA(_f(c26.dobit));
   var marza = p26>0 ? ((d26/p26)*100).toFixed(1) : '0.0';
+  var marzaTxt = (parseFloat(marza)||0).toLocaleString('hr-HR',{minimumFractionDigits:1,maximumFractionDigits:1});
 
   var st=document.getElementById('hdStatus');
   if (st) st.innerHTML=hdStatusHtml();
@@ -1836,14 +1870,19 @@ function refreshKPI(c26) {
     var brojStavki=0;
     try { brojStavki=pnSveStavke().length; } catch(e) {}
     g.innerHTML =
-      hdKpi({ikona:'up', boja:'#34c759', boja2:'var(--green)', label:'Ukupni prihodi · '+_lbl, vrijednost:fmt2(p26)+' <em>EUR</em>'}) +
-      hdKpi({ikona:'down', boja:'#ff3b30', boja2:'var(--red)', label:'Ukupni rashodi · '+_lbl, vrijednost:fmt2(r26)+' <em>EUR</em>'}) +
+      hdKpi({ikona:'up', boja:'#34c759', boja2:'var(--green)', label:'Ukupni prihodi · '+_lbl, vrijednost:fmt2(p26)+' <em>EUR</em>',
+             nota:'prosjek '+fmt2(p26/12)+' EUR mjesečno'}) +
+      hdKpi({ikona:'down', boja:'#ff3b30', boja2:'var(--red)', label:'Ukupni rashodi · '+_lbl, vrijednost:fmt2(r26)+' <em>EUR</em>',
+             nota:'prosjek '+fmt2(r26/12)+' EUR mjesečno'}) +
       hdKpi({ikona:'chart', boja:(d26>=0?'#007aff':'#ff3b30'), boja2:(d26>=0?'var(--green)':'var(--red)'),
              label:'Dobit / gubitak · '+_lbl, vrijednost:(d26<0?'−':'')+fmt2(Math.abs(d26))+' <em>EUR</em>',
-             nota:'Marža: <b style="color:'+(d26>=0?'var(--green)':'var(--red)')+'">'+marza+'%</b>'}) +
-      hdKpi({ikona:'calendar', boja:'#af52de', label:'Evidentiranih stavki', vrijednost:String(brojStavki),
-             nota:'u svim kategorijama 2026.'});
+             nota:brojStavki+' evidentiranih stavki 2026.'}) +
+      hdKpi({ikona:'percent', boja:(d26>=0?'#34c759':'#ff9500'), boja2:(d26>=0?'var(--green)':'var(--red)'),
+             label:'Neto marža · '+_lbl, vrijednost:marzaTxt+' <em>%</em>',
+             nota:'dobit u odnosu na prihode'});
   }
+  var al=document.getElementById('hdAlarm');
+  if (al) al.innerHTML=hdAlarmHtml();
   var cw=document.getElementById('hdCalWrap');
   if (cw) cw.innerHTML=hdCalHtml();
 
@@ -1861,16 +1900,15 @@ function initDash() {
   var el=document.getElementById('tab-dash');
   var h='<div class="hd-cap">Stanje danas</div><div class="hd-status" id="hdStatus"></div>';
   h+='<div class="hd-cap">Rezultat razdoblja</div><div class="hd-kpis" id="hdKpi"></div>';
-  h+='<div class="chart-card-wide"><div class="chart-title">Prihodi vs Rashodi 2026</div><div class="chart-box" style="position:relative;height:286px"><canvas id="cU"></canvas></div></div>';
-  h+='<div class="chart-card-wide" id="artikliCard"><div class="chart-title">Struktura prihoda po kategoriji</div><div class="artikliGrid" style="display:grid;grid-template-columns:minmax(0,220px) minmax(0,1fr);gap:20px;align-items:center"><div style="position:relative;height:220px;width:220px;max-width:100%;margin:0 auto"><canvas id="cArtikli"></canvas></div><div id="artikliLegend" style="display:flex;flex-direction:column;gap:7px;min-width:0"></div></div></div>';
+  h+='<div id="hdAlarm"></div>';
+  h+='<div class="chart-card-wide"><div class="chart-title">Prihodi i rashodi po mjesecima</div><div style="font-size:11px;color:var(--label3);margin:-6px 0 10px">Zeleno su prihodi, crveno rashodi.</div><div class="chart-box" style="position:relative;height:320px"><canvas id="cU"></canvas></div></div>';
   h+='<div class="charts-grid">';
-  h+='<div class="chart-card"><div class="chart-title">Prihodi po mjesecima</div><div class="chart-box" style="position:relative;height:210px"><canvas id="cP"></canvas></div></div>';
-  h+='<div class="chart-card"><div class="chart-title">Rashodi po mjesecima</div><div class="chart-box" style="position:relative;height:210px"><canvas id="cR"></canvas></div></div>';
-  h+='<div class="chart-card"><div class="chart-title">Dobit / gubitak po mjesecima</div><div style="font-size:11px;color:var(--label3);margin:-6px 0 10px">Zeleno je dobit, crveno gubitak.</div><div class="chart-box" style="position:relative;height:210px"><canvas id="cD"></canvas></div></div>';
-  h+='<div class="chart-card"><div class="chart-title">Kumulativni rezultat</div><div id="cCumSub" style="font-size:11px;color:var(--label3);margin:-6px 0 10px"></div><div class="chart-box" style="position:relative;height:210px"><canvas id="cCum"></canvas></div></div>';
+  h+='<div class="chart-card"><div class="chart-title">Dobit / gubitak po mjesecima</div><div style="font-size:11px;color:var(--label3);margin:-6px 0 10px">Zeleno je dobit, crveno gubitak.</div><div class="chart-box" style="position:relative;height:240px"><canvas id="cD"></canvas></div></div>';
+  h+='<div class="chart-card"><div class="chart-title">Kumulativni rezultat</div><div id="cCumSub" style="font-size:11px;color:var(--label3);margin:-6px 0 10px"></div><div class="chart-box" style="position:relative;height:240px"><canvas id="cCum"></canvas></div></div>';
   h+='<div class="chart-card"><div class="chart-title">Struktura tro\u0161kova 2026</div><div style="font-size:11px;color:var(--label3);margin:-6px 0 10px">Udjel svake kategorije u ukupnim rashodima</div><div style="height:220px;width:100%;display:flex;justify-content:center"><canvas id="cS"></canvas></div><div id="cSLegend" style="margin-top:10px"></div></div>';
   h+='<div class="chart-card"><div class="chart-title">Najve\u0107i tro\u0161kovi</div><div style="font-size:11px;color:var(--label3);margin:-6px 0 10px">Deset najve\u0107ih stavki u 2026.</div><div id="topTroskoviList"></div></div>';
   h+='</div>';
+  h+='<div class="chart-card-wide" id="artikliCard"><div class="chart-title">Struktura prihoda po kategoriji</div><div class="artikliGrid" style="display:grid;grid-template-columns:minmax(0,240px) minmax(0,1fr);gap:24px;align-items:center"><div style="position:relative;height:240px;width:240px;max-width:100%;margin:0 auto"><canvas id="cArtikli"></canvas></div><div id="artikliLegend" style="display:flex;flex-direction:column;gap:7px;min-width:0"></div></div></div>';
   el.innerHTML=h;
   buildCharts();
   buildCumulativeChart();
