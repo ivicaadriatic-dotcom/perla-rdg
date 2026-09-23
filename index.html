@@ -6686,10 +6686,21 @@ function sbStatus(txt, vrsta){
 function sbChipOsvjezi(){
   var chip=document.getElementById('sbChip'), txt=document.getElementById('sbStatusMini');
   if (!chip||!txt) return;
-  if (!sbUkljucen()) { chip.style.display='none'; return; }
+  if (!sbUkljucen() && !SB_ISTEKLA) { chip.style.display='none'; return; }
+  if (SB_ISTEKLA && !sbUkljucen()) {
+    chip.style.display='inline-flex'; chip.className='sb-chip err';
+    txt.textContent='Prijava istekla'; chip.title='Prijavite se ponovno u Postavkama.';
+    return;
+  }
   chip.style.display='inline-flex';
   chip.className='sb-chip';
-  if (SB_VRSTA==='err') { chip.classList.add('err'); txt.textContent='Sinkronizacija ne radi'; return; }
+  if (SB_VRSTA==='err') {
+    chip.classList.add('err');
+    txt.textContent = /istekla/i.test(SB_ZADNJI) ? 'Prijava istekla' :
+                      (/veze|mrež/i.test(SB_ZADNJI) ? 'Nema veze' : 'Sinkronizacija ne radi');
+    chip.title = SB_ZADNJI;
+    return;
+  }
   if (/Povla\u010dim|\u0160aljem|Prijava/.test(SB_ZADNJI)) { chip.classList.add('rad'); txt.textContent='Sinkroniziram\u2026'; return; }
   if (SB_ZADNJA_OK) {
     chip.classList.add('ok');
@@ -6698,6 +6709,7 @@ function sbChipOsvjezi(){
   } else txt.textContent='Spremno';
 }
 function sbChipKlik(){
+  if (SB_ISTEKLA && !sbUkljucen()) { if (typeof switchTab==='function') switchTab('postavke'); return; }
   if (SB_VRSTA==='err') { sbSinkronizirajSada(); return; }
   if (typeof switchTab==='function') switchTab('postavke');
 }
@@ -6706,20 +6718,47 @@ function sbZaglavlja(sJson){
   if (sJson) h['Content-Type']='application/json';
   return h;
 }
+var SB_OBNOVA=null;   // obnova tokena koja je trenutno u tijeku
 function sbOsvjeziToken(){
   if (!SB.refresh) return Promise.reject(new Error('nema prijave'));
-  return fetch(SB.url+'/auth/v1/token?grant_type=refresh_token', {
+  if (SB_OBNOVA) return SB_OBNOVA;   // vec traje — pricekaj istu, ne trazi novu
+  SB_OBNOVA = fetch(SB.url+'/auth/v1/token?grant_type=refresh_token', {
     method:'POST', headers:{'apikey':SB.kljuc,'Content-Type':'application/json'},
     body:JSON.stringify({refresh_token:SB.refresh})
   }).then(function(r){ return r.json().then(function(j){
-    if (!r.ok || !j.access_token) throw new Error(j.error_description||j.msg||'prijava istekla');
+    if (!r.ok || !j.access_token) {
+      var greska=new Error(j.error_description||j.msg||j.message||'prijava istekla');
+      greska.prijavaIstekla=true;
+      throw greska;
+    }
     SB.token=j.access_token; SB.refresh=j.refresh_token||SB.refresh;
     SB.istek=Date.now()+((j.expires_in||3600)*1000)-60000;
     sbSpremiPostavke(); return true;
-  }); });
+  }); }).then(function(v){ SB_OBNOVA=null; return v; },
+             function(e){ SB_OBNOVA=null; throw e; });
+  return SB_OBNOVA;
 }
+// Razumljiva poruka umjesto tehnicke
+function sbPorukaGreske(e){
+  var m=String((e&&e.message)||e||'');
+  if (e && e.prijavaIstekla) return 'Prijava je istekla — prijavite se ponovno.';
+  if (/Failed to fetch|NetworkError|Load failed|network/i.test(m)) return 'Nema veze s poslužiteljem — pokušavam ponovno.';
+  if (/JWT|expired|invalid/i.test(m)) return 'Prijava je istekla — prijavite se ponovno.';
+  return m;
+}
+// Prijava vise ne vrijedi: ocisti token da se ponudi ponovna prijava
+function sbPrijavaIstekla(){
+  SB.token=''; SB.istek=0; SB_ISTEKLA=true;
+  sbSpremiPostavke();
+  sbStatus('Prijava je istekla \u2014 prijavite se ponovno.','err');
+  if (typeof renderPostavke==='function' && activeTab==='postavke') renderPostavke();
+}
+var SB_ISTEKLA=false;   // prijava je istekla, ceka se ponovna prijava
 function sbSpreman(){
-  if (!SB.url || !SB.kljuc || !SB.token) return Promise.reject(new Error('sinkronizacija nije postavljena'));
+  if (!SB.url || !SB.kljuc || !SB.token) {
+    var e=new Error('sinkronizacija nije postavljena'); e.nemaPrijave=true;
+    return Promise.reject(e);
+  }
   if (SB.istek && Date.now()>SB.istek) return sbOsvjeziToken();
   return Promise.resolve(true);
 }
@@ -6733,7 +6772,7 @@ function sbPrijava(email, lozinka){
     if (!r.ok || !j.access_token) throw new Error(j.error_description||j.msg||j.message||'neuspješna prijava');
     SB.token=j.access_token; SB.refresh=j.refresh_token||'';
     SB.istek=Date.now()+((j.expires_in||3600)*1000)-60000;
-    SB.email=email; SB.korisnik=(j.user&&j.user.id)||'';
+    SB.email=email; SB.korisnik=(j.user&&j.user.id)||''; SB_ISTEKLA=false;
     sbSpremiPostavke();
     sbStatus('Prijavljen — povlačim podatke…','ok');
     // Prva prijava: prvo povuci što je u oblaku, pa pošalji sve što je na ovom uređaju
@@ -6789,7 +6828,11 @@ function sbPosalji(tiho){
       sbSpremiCeka();
       sbStatus('Spremljeno u oblak · '+new Date().toLocaleTimeString('hr-HR'),'ok');
     });
-  }).catch(function(e){ sbStatus('Slanje nije uspjelo: '+e.message,'err'); });
+  }).catch(function(e){
+    if (e && e.prijavaIstekla) return sbPrijavaIstekla();
+    if (e && e.nemaPrijave) return;   // nije prijavljen — nema se sto javiti
+    sbStatus('Slanje nije uspjelo: '+sbPorukaGreske(e),'err');
+  });
 }
 // Uredaj je "prazan" ako u knjizi transakcija nema nijednog stvarnog zapisa.
 // Tada oblak uvijek pobjeduje — inace bi prazni tvornicki predlosci, zapisani
@@ -6850,7 +6893,11 @@ function sbPovuci(tiho){
     } else if (!tiho) {
       sbStatus('Sve je već usklađeno · '+new Date().toLocaleTimeString('hr-HR'),'ok');
     }
-  }).catch(function(e){ sbStatus('Povlačenje nije uspjelo: '+e.message,'err'); });
+  }).catch(function(e){
+    if (e && e.prijavaIstekla) return sbPrijavaIstekla();
+    if (e && e.nemaPrijave) return;   // nije prijavljen — nema se sto javiti
+    sbStatus('Povlačenje nije uspjelo: '+sbPorukaGreske(e),'err');
+  });
 }
 // Razumljivi nazivi podataka za izvjestaj
 var SB_NAZIVI={
