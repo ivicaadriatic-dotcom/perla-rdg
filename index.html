@@ -1413,6 +1413,14 @@ function mkTD() {
   return d;
 }
 
+// Koji su kljucevi postojali PRIJE pokretanja. Sve sto aplikacija sama zapise
+// pri pokretanju (tvornicki predlosci) nije korisnikov rad — kod sinkronizacije
+// takvi kljucevi ne smiju izgledati "noviji" od oblaka.
+var PN_KLJ_POC = (function(){
+  var o={}; try { for (var i=0;i<localStorage.length;i++) o[localStorage.key(i)]=1; } catch(e){}
+  return o;
+})();
+
 // Load ROWS
 var ROWS = (function() {
   try { var s=localStorage.getItem('pn_rows'); if(s) return JSON.parse(s); } catch(e) {}
@@ -6681,7 +6689,26 @@ function sbPosalji(tiho){
     });
   }).catch(function(e){ sbStatus('Slanje nije uspjelo: '+e.message,'err'); });
 }
+// Uredaj je "prazan" ako u knjizi transakcija nema nijednog stvarnog zapisa.
+// Tada oblak uvijek pobjeduje — inace bi prazni tvornicki predlosci, zapisani
+// pri pokretanju, izgledali noviji od podataka u oblaku.
+function sbBezSadrzaja(){
+  try {
+    for (var id in TD) {
+      var mj=TD[id]; if (!mj) continue;
+      for (var m=0;m<12;m++) {
+        var rows=mj[m]||[];
+        for (var i=0;i<rows.length;i++) {
+          if ((parseFloat(rows[i].iznos)||0)!==0) return false;
+          if (String(rows[i].tvrtka||'').trim()) return false;
+        }
+      }
+    }
+  } catch(e){ return false; }
+  return true;
+}
 function sbPovuci(tiho){
+  var SB_PRAZNO = sbBezSadrzaja();
   return sbSpreman().then(function(){
     if (!tiho) sbStatus('Povlačim iz oblaka…');
     return fetch(SB.url+'/rest/v1/rdg_stanje?select=kljuc,vrijednost,azurirano', {headers:sbZaglavlja()});
@@ -6694,7 +6721,10 @@ function sbPovuci(tiho){
     redovi.forEach(function(x){
       if (!pnSyncKljuc(x.kljuc)) return;
       var lok=SB_LOK[x.kljuc]||'';
-      // Noviji zapis pobjeđuje; kod jednakog vremena ostaje lokalni
+      // Uredaj bez sadrzaja, ili kljuc koji je aplikacija sama stvorila pri
+      // pokretanju — to nije korisnikov rad, pa oblak pobjeduje.
+      if (SB_PRAZNO || !PN_KLJ_POC[x.kljuc]) lok='';
+      // Inace: noviji zapis pobjeđuje; kod jednakog vremena ostaje lokalni
       if (lok && new Date(lok)>=new Date(x.azurirano)) return;
       try {
         if (x.vrijednost==null || x.vrijednost==='') localStorage.removeItem(x.kljuc);
@@ -7290,6 +7320,23 @@ try { apPrimijeni(false); apOznakaOsvjezi(); saveDailyAndSync(); } catch(e) { co
 // Transakcijski tabovi (TD) sluze samo za unos i prikaz, P vrijednosti
 // se uvijek ucitavaju direktno iz pn_p/pn_p_full lokalnog pohrana.
 for (var _ri=0; _ri<ROWS.length; _ri++) { if (!P[ROWS[_ri].key]) P[ROWS[_ri].key]=mk12(); }
+// Sigurnosna mreza: ako rubrika ima transakcije, a njezin P redak je cijele
+// godine nula (npr. nakon prijenosa podataka s drugog uredaja), izracunaj ga iz TD-a.
+(function(){
+  var popravljeno=false;
+  for (var _hid in TD) {
+    var _hk=TAB_TO_P[_hid]; if (!_hk || !TD[_hid]) continue;
+    var _imaTD=false, _imaP=false;
+    for (var _hm=0; _hm<12; _hm++) {
+      if (sumR(TD[_hid][_hm])!==0) _imaTD=true;
+      if (P[_hk] && (parseFloat(P[_hk][_hm])||0)!==0) _imaP=true;
+    }
+    if (_imaTD && !_imaP) { syncTDtoP(_hid); popravljeno=true; }
+  }
+  if (popravljeno) {
+    try { localStorage.setItem('pn_p', JSON.stringify(P)); localStorage.setItem('pn_p_full', JSON.stringify(P)); } catch(e){}
+  }
+})();
 if (window.__RO__) document.body.setAttribute('data-ro','true');
 applySettingsToHeader();
 // UVIJEK iznova izracunaj prihodi_vending iz DAILY (bez obzira na localStorage)
