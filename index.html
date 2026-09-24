@@ -6643,6 +6643,8 @@ function sbSpremiCeka(){ try { localStorage.setItem('pn_sync_ceka', JSON.stringi
 var SB_POSAO = null, SB_ZADNJI = '';
 
 function sbSpremiPostavke(){ try { localStorage.setItem('pn_sb', JSON.stringify(SB)); } catch(e){} }
+// Zatecena postavka s ugasenom automatikom (iz starijih verzija) — ukljuci je.
+(function(){ if (!SB.auto) { SB.auto=true; sbSpremiPostavke(); } })();
 function sbUkljucen(){ return !!(SB.url && SB.kljuc && SB.token); }
 function pnSyncKljuc(k){
   if (!k || k.indexOf('pn_')!==0) return false;
@@ -6659,7 +6661,7 @@ function pnSyncOznaci(k){
   SB_CEKA[k]=1;
   try { localStorage.setItem('pn_sync_lok', JSON.stringify(SB_LOK)); } catch(e){}
   sbSpremiCeka();
-  if (SB.auto && sbUkljucen()) sbZakaziSlanje();
+  if (sbUkljucen()) sbZakaziSlanje();
 }
 // Svaka izmjena u localStorage automatski se biljezi za sinkronizaciju
 (function(){
@@ -7041,7 +7043,7 @@ function sbSinkronizirajSada(){
 function sbPostaviPolja(){
   var g=function(x){ return ((document.getElementById(x)||{}).value||'').trim(); };
   SB.url=g('sbUrl').replace(/\/+$/,''); SB.kljuc=g('sbKljuc');
-  SB.auto=!!(document.getElementById('sbAuto')||{}).checked;
+  SB.auto=true;   // automatika je uvijek ukljucena dok je uredaj prijavljen
   sbSpremiPostavke();
   sbStatus('Postavke spremljene.','ok');
 }
@@ -7106,7 +7108,7 @@ function sbPanelHtml(){
     h+='<div class="pst-row"><span class="pst-ico sm" style="background:#34c759">'+PST_ICO.up+'</span>'+
        '<div class="pst-row-txt"><div class="pst-row-t">Sinkronizacija</div>'+
        '<div class="pst-row-d">Promjene se šalju same nekoliko sekundi nakon spremanja. Pri otvaranju aplikacije podaci se povuku iz oblaka.</div>'+
-       '<label class="pst-chk"><input type="checkbox" id="sbAuto"'+(SB.auto?' checked':'')+' onchange="sbPostaviPolja()"> Automatski šalji promjene</label>'+
+       '<div class="pst-row-d" style="margin-top:2px">Sinkronizacija radi sama dok ste prijavljeni — promjene odlaze u oblak nekoliko sekundi nakon spremanja, a oblak se provjerava svakih 20 sekundi. Za prekid se odjavite.</div>'+
        '<div class="pst-row-a"><button type="button" class="pst-btn pri" onclick="sbSinkronizirajSada()">'+PST_ICO.db+'<span>Sinkroniziraj sada</span></button>'+
        '<button type="button" class="pst-btn ghost" onclick="sbProvjeriOblak()">'+PST_ICO.db+'<span>Provjeri sve podatke</span></button>'+
        '<button type="button" class="pst-btn ghost" onclick="sbOdjava()">'+PST_ICO.trash+'<span>Odjavi se</span></button></div>'+
@@ -7138,7 +7140,7 @@ function sbZauzet(){
 }
 // Povuci ako je proslo dovoljno vremena od zadnjeg puta
 function sbOsvjeziAko(razmakMs){
-  if (!sbUkljucen() || !SB.auto) return;
+  if (!sbUkljucen()) return;
   if (document.hidden) return;
   if (Date.now()-SB_ZADNJE_POVL < (razmakMs||15000)) return;
   SB_ZADNJE_POVL=Date.now();
@@ -7152,7 +7154,7 @@ function sbOsvjeziAko(razmakMs){
 }
 // Pri pokretanju: ako je uredjaj prijavljen, povuci sto je novije u oblaku
 (function(){
-  setTimeout(function(){ SB_ZADNJE_POVL=Date.now(); if (sbUkljucen() && SB.auto) { try { sbPovuci(true).then(function(){ sbPosalji(true); }); } catch(e){} } sbChipOsvjezi(); }, 1800);
+  setTimeout(function(){ SB_ZADNJE_POVL=Date.now(); if (sbUkljucen()) { try { sbPovuci(true).then(function(){ sbPosalji(true); }); } catch(e){} } sbChipOsvjezi(); }, 1800);
   // Povratak u aplikaciju (mobitel iz pozadine, prebacivanje kartica, povratak fokusa)
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) sbOsvjeziAko(20000); });
   window.addEventListener('focus', function(){ sbOsvjeziAko(20000); });
