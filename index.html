@@ -6686,10 +6686,13 @@ function sbStatus(txt, vrsta){
 function sbChipOsvjezi(){
   var chip=document.getElementById('sbChip'), txt=document.getElementById('sbStatusMini');
   if (!chip||!txt) return;
-  if (!sbUkljucen() && !SB_ISTEKLA) { chip.style.display='none'; return; }
-  if (SB_ISTEKLA && !sbUkljucen()) {
+  // Nije ni postavljeno — nema se sto pokazivati
+  if (!SB.url || !SB.kljuc) { chip.style.display='none'; return; }
+  // Postavljeno, ali bez prijave: to se MORA vidjeti
+  if (!sbUkljucen()) {
     chip.style.display='inline-flex'; chip.className='sb-chip err';
-    txt.textContent='Prijava istekla'; chip.title='Prijavite se ponovno u Postavkama.';
+    txt.textContent = SB_ISTEKLA ? 'Prijava istekla' : 'Niste prijavljeni';
+    chip.title='Promjene se ne šalju u oblak. Kliknite za prijavu.';
     return;
   }
   chip.style.display='inline-flex';
@@ -6709,7 +6712,7 @@ function sbChipOsvjezi(){
   } else txt.textContent='Spremno';
 }
 function sbChipKlik(){
-  if (SB_ISTEKLA && !sbUkljucen()) { if (typeof switchTab==='function') switchTab('postavke'); return; }
+  if (!sbUkljucen()) { if (typeof switchTab==='function') switchTab('postavke'); return; }
   if (SB_VRSTA==='err') { sbSinkronizirajSada(); return; }
   if (typeof switchTab==='function') switchTab('postavke');
 }
@@ -6785,8 +6788,9 @@ function sbPrijava(email, lozinka){
   });
 }
 function sbOdjava(){
-  SB.token=''; SB.refresh=''; SB.istek=0; SB.korisnik='';
+  SB.token=''; SB.refresh=''; SB.istek=0; SB.korisnik=''; SB_ISTEKLA=false;
   sbSpremiPostavke(); sbStatus('Odjavljen.');
+  sbChipOsvjezi();
   if (typeof renderPostavke==='function') renderPostavke();
 }
 // Sve što na ovom uređaju postoji, a još nije zabilježeno za slanje — zabilježi sada.
@@ -6805,7 +6809,17 @@ function sbOznaciSve(){
 }
 function sbZakaziSlanje(){
   if (SB_POSAO) clearTimeout(SB_POSAO);
-  SB_POSAO=setTimeout(function(){ SB_POSAO=null; sbPosalji(); }, 2500);
+  SB_POSAO=setTimeout(function(){ SB_POSAO=null; SB_POKUSAJ=0; sbPosalji(); }, 2500);
+}
+// Ako slanje ne uspije, samo se ponavlja — sve dulji razmak, najvise 2 minute.
+var SB_POKUSAJ=0, SB_PONOVO=null;
+function sbPonoviSlanje(){
+  var ima=false; for (var k in SB_CEKA) { ima=true; break; }
+  if (!ima) { SB_POKUSAJ=0; return; }
+  if (SB_PONOVO) return;
+  SB_POKUSAJ++;
+  var cekaj=Math.min(120000, 10000*SB_POKUSAJ);
+  SB_PONOVO=setTimeout(function(){ SB_PONOVO=null; sbPosalji(true); }, cekaj);
 }
 function sbPosalji(tiho){
   return sbSpreman().then(function(){
@@ -6825,13 +6839,14 @@ function sbPosalji(tiho){
     }).then(function(r){
       if (!r.ok) return r.text().then(function(t){ throw new Error(t.slice(0,180)); });
       for (var i=0;i<poslani.length;i++) delete SB_CEKA[poslani[i]];
-      sbSpremiCeka();
+      sbSpremiCeka(); SB_POKUSAJ=0;
       sbStatus('Spremljeno u oblak · '+new Date().toLocaleTimeString('hr-HR'),'ok');
     });
   }).catch(function(e){
     if (e && e.prijavaIstekla) return sbPrijavaIstekla();
     if (e && e.nemaPrijave) return;   // nije prijavljen — nema se sto javiti
-    sbStatus('Slanje nije uspjelo: '+sbPorukaGreske(e),'err');
+    sbStatus('Slanje nije uspjelo: '+sbPorukaGreske(e)+' — pokušavam ponovno…','err');
+    sbPonoviSlanje();
   });
 }
 // Uredaj je "prazan" ako u knjizi transakcija nema nijednog stvarnog zapisa.
@@ -6854,12 +6869,36 @@ function sbBezSadrzaja(){
 }
 function sbPovuci(tiho){
   var SB_PRAZNO = sbBezSadrzaja();
+  // Treba li ovaj podatak uopce preuzeti?
+  var trebaMi=function(kljuc, azurirano){
+    if (!pnSyncKljuc(kljuc)) return false;
+    var lok=SB_LOK[kljuc]||'';
+    if (SB_PRAZNO || !PN_KLJ_POC[kljuc]) lok='';
+    if (!SB_CEKA[kljuc]) lok='';
+    if (lok && new Date(lok)>=new Date(azurirano)) return false;
+    // nema nespremljene promjene i vrijeme je isto kao zadnji put — nema novosti
+    if (!SB_CEKA[kljuc] && SB_LOK[kljuc]===azurirano) return false;
+    return true;
+  };
   return sbSpreman().then(function(){
     if (!tiho) sbStatus('Povlačim iz oblaka…');
-    return fetch(SB.url+'/rest/v1/rdg_stanje?select=kljuc,vrijednost,azurirano', {headers:sbZaglavlja()});
+    // KORAK 1: samo nazivi i vremena — nekoliko stotina bajtova
+    return fetch(SB.url+'/rest/v1/rdg_stanje?select=kljuc,azurirano', {headers:sbZaglavlja()});
   }).then(function(r){
     if (!r.ok) return r.text().then(function(t){ throw new Error(t.slice(0,180)); });
     return r.json();
+  }).then(function(glave){
+    if (!glave) return [];
+    var treba=[];
+    glave.forEach(function(x){ if (trebaMi(x.kljuc, x.azurirano)) treba.push(x.kljuc); });
+    if (!treba.length) return [];
+    // KORAK 2: pune vrijednosti samo za ono sto se promijenilo
+    var popis=treba.map(function(k){ return '"'+k+'"'; }).join(',');
+    return fetch(SB.url+'/rest/v1/rdg_stanje?select=kljuc,vrijednost,azurirano&kljuc=in.('+encodeURIComponent(popis)+')',
+                 {headers:sbZaglavlja()}).then(function(r2){
+      if (!r2.ok) return r2.text().then(function(t){ throw new Error(t.slice(0,180)); });
+      return r2.json();
+    });
   }).then(function(redovi){
     if (!redovi) return;
     var promjena=0;
@@ -6889,7 +6928,7 @@ function sbPovuci(tiho){
     sbSpremiCeka();
     if (promjena) {
       sbStatus(promjena+' zapisa povučeno — osvježavam prikaz…','ok');
-      setTimeout(function(){ location.reload(); }, 800);
+      sbOsvjeziPrikaz();
     } else if (!tiho) {
       sbStatus('Sve je već usklađeno · '+new Date().toLocaleTimeString('hr-HR'),'ok');
     }
@@ -7078,6 +7117,16 @@ function sbPanelHtml(){
   return h;
 }
 var SB_ZADNJE_POVL = 0;
+// Osvjezi prikaz cim korisnik nije usred unosa (da mu se ne prekine rad).
+var SB_CEKA_PRIKAZ=null;
+function sbOsvjeziPrikaz(){
+  if (SB_CEKA_PRIKAZ) return;
+  var pokusaj=function(){
+    if (!sbZauzet()) { location.reload(); return; }
+    SB_CEKA_PRIKAZ=setTimeout(pokusaj, 3000);   // pricekaj da zavrsi unos
+  };
+  SB_CEKA_PRIKAZ=setTimeout(pokusaj, 800);
+}
 // Je li korisnik usred unosa — tada se ne osvjezava da mu se ne prekine rad
 function sbZauzet(){
   try {
@@ -7091,8 +7140,7 @@ function sbZauzet(){
 function sbOsvjeziAko(razmakMs){
   if (!sbUkljucen() || !SB.auto) return;
   if (document.hidden) return;
-  if (Date.now()-SB_ZADNJE_POVL < (razmakMs||20000)) return;
-  if (sbZauzet()) return;
+  if (Date.now()-SB_ZADNJE_POVL < (razmakMs||15000)) return;
   SB_ZADNJE_POVL=Date.now();
   try {
     sbPovuci(true).then(function(){
@@ -7110,7 +7158,7 @@ function sbOsvjeziAko(razmakMs){
   window.addEventListener('focus', function(){ sbOsvjeziAko(20000); });
   window.addEventListener('online', function(){ sbOsvjeziAko(0); });
   // Povremeno dok je aplikacija otvorena
-  setInterval(function(){ sbOsvjeziAko(110000); }, 60000);
+  setInterval(function(){ sbOsvjeziAko(18000); }, 20000);
 })();
 
 function izvozKompletanBackup() {
