@@ -7401,6 +7401,25 @@ function idiNatrag(){
   var v=document.getElementById('view'); if(v) v.scrollTop=0;
 }
 function idiNaPocetnu(){ TAB_HIST=[]; _tabNatrag=true; switchTab('dash'); var v=document.getElementById('view'); if(v) v.scrollTop=0; }
+// Spremnik u koji idu stranice rubrika
+function pnSpremnikStranica(){
+  return document.querySelector('#view > .content') ||
+         document.querySelector('#view .content') ||
+         document.querySelector('.content') ||
+         document.getElementById('view');
+}
+// Rubrike koje nemaju gotovu stranicu u dokumentu (vlastite rubrike, pozajmice…)
+// dobivaju je ovdje — prije nego je switchTab potrazi.
+function pnOsigurajStranicu(id){
+  if (!id) return null;
+  var el=document.getElementById('tab-'+id);
+  if (el) return el;
+  var wr=pnSpremnikStranica(); if (!wr) return null;
+  el=document.createElement('div');
+  el.id='tab-'+id; el.className='tab-pane';
+  wr.appendChild(el);
+  return el;
+}
 function switchTab(id) {
   if (!_tabNatrag && typeof activeTab!=='undefined' && activeTab && activeTab!==id) { TAB_HIST.push(activeTab); if (TAB_HIST.length>30) TAB_HIST.shift(); }
   _tabNatrag=false;
@@ -7418,7 +7437,8 @@ function switchTab(id) {
   }
   var panes=document.querySelectorAll('.tab-pane');
   for (var i=0; i<panes.length; i++) panes[i].classList.remove('active');
-  var activePane=document.getElementById('tab-'+id);
+  var activePane=pnOsigurajStranicu(id);
+  if (!activePane) return;
   activePane.classList.add('active');
   osvjeziBackBar(id);
   setTimeout(function(){ // naslov za rubrike koje ga nemaju (npr. kategorije transakcija)
@@ -7469,12 +7489,6 @@ function switchTab(id) {
       for(var _sm=0;_sm<12;_sm++) TD[id].push([{datum:'',iznos:0,tvrtka:'',vpl:'',placeno:''}]);
     }
     if (TS[id]===undefined) TS[id]=0;
-    if (!document.getElementById('tab-'+id)) {
-      var _newPane=document.createElement('div');
-      _newPane.id='tab-'+id; _newPane.className='tab-pane';
-      var _wr=document.querySelector('.main-wrap .content');
-      if (_wr) _wr.appendChild(_newPane);
-    }
     renderTrans(id);
   }
 }
@@ -7507,13 +7521,7 @@ function switchTab(id) {
       // Dodaj u TAB_TO_P
       TAB_TO_P[_r.key]=_r.key;
       // Kreiraj tab pane div u HTML-u
-      if (!document.getElementById('tab-'+_r.key)) {
-        var _pane=document.createElement('div');
-        _pane.id='tab-'+_r.key;
-        _pane.className='tab-pane';
-        var _wrap=document.querySelector('.main-wrap .content');
-        if (_wrap) _wrap.appendChild(_pane);
-      }
+      pnOsigurajStranicu(_r.key);
       existingIds[_r.key]=true;
     }
   }
