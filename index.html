@@ -5695,85 +5695,368 @@ function exportViewPDF() {
 
 
 // ═══════════════════════════════════════════
-// PDV OBRAČUN (simulacija stanja za plaćanje)
+// PDV OBRAČUN
+// Model preuzet iz DYS RDG: PDV se računa PO SVAKOJ STAVCI, a ne po
+// zbroju cijele rubrike. Svaka rubrika ima svoj tip (dom / ino / bez),
+// stopu i postotak odbitka pretporeza. Pojedina stavka može odstupati:
+// ili po ključnoj riječi iz opisa (iznimke), ili ručno postavljenim tipom.
+// Osnova obračuna je datum računa; ako račun dođe s zakašnjenjem, stavci
+// se može zadati drugo PDV razdoblje (mjesec u kojem ga je knjigovodstvo primilo).
 // ═══════════════════════════════════════════
-var PDV_STOPA = 0.25; // standardna hrvatska stopa PDV-a 25%
-// Kategorije koje ULAZE u osnovicu za pretporez (imaju PDV na računu)
-var PDV_ULAZNE_KAT = ['knjigovodstvo','nabava_proteina','nabava_casa','telefon','internet','razno'];
 
-function pdvCalcMonthly() {
+// Tvorničke postavke po rubrici: t = tip (dom/ino/bez), s = stopa %, o = % odbitka
+var PDV_DEF_KAT = {
+  place_mgmt:      {t:'bez', s:0,  o:0},
+  place_ostali:    {t:'bez', s:0,  o:0},
+  knjigovodstvo:   {t:'dom', s:25, o:100},
+  nabava_proteina: {t:'dom', s:25, o:100},
+  nabava_casa:     {t:'dom', s:25, o:100},
+  banka:           {t:'bez', s:0,  o:0},
+  javni_bilj:      {t:'bez', s:0,  o:0},
+  pdv:             {t:'bez', s:0,  o:0},
+  odvjetnik:       {t:'dom', s:25, o:100},
+  clanarina_hgk:   {t:'bez', s:0,  o:0},
+  telefon:         {t:'dom', s:25, o:100},
+  internet:        {t:'dom', s:25, o:100},
+  razno:           {t:'dom', s:25, o:100},
+  pozajmice:       {t:'bez', s:0,  o:0}
+};
+
+// Iznimke po ključnoj riječi u opisu stavke — nadjačavaju tip rubrike.
+var PDV_DEF_IZN = [
+  {p:'POZAJM',           t:'bez'},
+  {p:'ZAJAM',            t:'bez'},
+  {p:'DOKAPITAL',        t:'bez'},
+  {p:'DONACIJA',         t:'bez'},
+  {p:'KAMATA',           t:'bez'},
+  {p:'JOPPD',            t:'bez'},
+  {p:'DOPRINOS',         t:'bez'},
+  {p:'SUDSKA PRISTOJBA', t:'bez'},
+  {p:'PRISTOJBA',        t:'bez'},
+  {p:'PROFORMA',         t:'ino'},
+  {p:'INVOICE',          t:'ino'},
+  {p:'USD',              t:'ino'},
+  {p:'GODADDY',          t:'ino'},
+  {p:'ALIBABA',          t:'ino'},
+  {p:'ALIEXPRESS',       t:'ino'}
+];
+
+var PDV_TIP_LBL = {dom:'Domaći', ino:'Ino', bez:'Bez PDV-a'};
+var PDV_TIP_BOJA = {dom:'var(--green)', ino:'var(--orange)', bez:'var(--label3)'};
+
+var PDVK = (function(){
+  var d = {stopa:25, osnova:'racun', kat:{}, izn:[], dod:mk12()};
+  for (var k in PDV_DEF_KAT) d.kat[k] = {t:PDV_DEF_KAT[k].t, s:PDV_DEF_KAT[k].s, o:PDV_DEF_KAT[k].o};
+  for (var i=0;i<PDV_DEF_IZN.length;i++) d.izn.push({p:PDV_DEF_IZN[i].p, t:PDV_DEF_IZN[i].t});
+  try {
+    var s=localStorage.getItem('pn_pdv');
+    if (s) {
+      var o=JSON.parse(s);
+      if (o.stopa!=null) d.stopa=parseFloat(o.stopa)||25;
+      if (o.osnova) d.osnova=o.osnova;
+      if (o.kat) { for (var k2 in o.kat) d.kat[k2]=o.kat[k2]; }
+      if (o.izn && o.izn.length!==undefined) d.izn=o.izn;
+      if (o.dod && o.dod.length===12) d.dod=o.dod;
+    }
+  } catch(e){}
+  return d;
+})();
+function pdvSpremi(){
+  try { localStorage.setItem('pn_pdv', JSON.stringify(PDVK)); } catch(e){}
+}
+
+// Sve rubrike troškova koje ulaze u obračun pretporeza (sve osim prihoda)
+function pdvKategorije(){
   var out=[];
-  for (var m=0; m<12; m++) {
-    var prihodBruto = (parseFloat((P.prihodi_grupe&&P.prihodi_grupe[m])||0)) + (parseFloat((P.prihodi_vending&&P.prihodi_vending[m])||0));
-    var izlOsn = prihodBruto>0 ? prihodBruto/(1+PDV_STOPA) : 0;
-    var izlPdv = prihodBruto - izlOsn;
-
-    var ulazBruto=0;
-    PDV_ULAZNE_KAT.forEach(function(catId){
-      var rowKey=TAB_TO_P[catId]; if(!rowKey || !P[rowKey]) return;
-      ulazBruto += parseFloat(P[rowKey][m])||0;
-    });
-    var ulOsn = ulazBruto>0 ? ulazBruto/(1+PDV_STOPA) : 0;
-    var ulPdv = ulazBruto - ulOsn;
-
-    var razlika = izlPdv - ulPdv;
-    out.push({m:m, izlOsn:izlOsn, izlPdv:izlPdv, ulOsn:ulOsn, ulPdv:ulPdv, razlika:razlika, prihodBruto:prihodBruto, ulazBruto:ulazBruto});
+  for (var k in TD) {
+    if (k==='prihodi26' || !TD[k]) continue;
+    // samo stvarne rubrike troškova: standardne (imaju red u RDG-u) i vlastite
+    if (!TAB_TO_P[k] && k.indexOf('custom_')!==0) continue;
+    out.push(k);
+  }
+  return out;
+}
+function pdvKatLbl(id){
+  for (var i=0;i<ALL_TABS.length;i++) if (ALL_TABS[i].id===id) return ALL_TABS[i].lbl;
+  var pk=TAB_TO_P[id];
+  if (pk) { for (var j=0;j<ROWS.length;j++) if (ROWS[j].key===pk) return ROWS[j].lbl; }
+  return id;
+}
+function pdvKatPost(id){
+  var k=PDVK.kat[id];
+  if (k) return {t:k.t||'bez', s:(k.s!=null?parseFloat(k.s):0), o:(k.o!=null?parseFloat(k.o):0)};
+  // Nepoznata (vlastita) rubrika: pretpostavi domaći račun s punim odbitkom
+  return {t:'dom', s:PDVK.stopa, o:100};
+}
+// Tip pojedine stavke: ručna oznaka > iznimka po ključnoj riječi > postavka rubrike
+function pdvTipStavke(katId, r){
+  if (r && r.pdvt) return r.pdvt;
+  var op=String((r&&r.tvrtka)||'').toUpperCase();
+  if (op) {
+    for (var i=0;i<PDVK.izn.length;i++) {
+      var x=PDVK.izn[i]; if (!x || !x.p) continue;
+      if (op.indexOf(String(x.p).toUpperCase())>=0) return x.t||'bez';
+    }
+  }
+  return pdvKatPost(katId).t;
+}
+function pdvStavka(katId, r){
+  var bruto=parseFloat(r.iznos)||0;
+  var post=pdvKatPost(katId);
+  var tip=pdvTipStavke(katId,r);
+  var rucno=!!(r&&r.pdvt);
+  var stopa=(tip==='dom') ? (post.s||PDVK.stopa) : 0;
+  var odb=(tip==='dom') ? (post.o!=null?post.o:100) : 0;
+  var osn=stopa>0 ? bruto/(1+stopa/100) : bruto;
+  var pdv=bruto-osn;
+  return {bruto:bruto, tip:tip, rucno:rucno, stopa:stopa, odb:odb, osn:osn, pdv:pdv, priznato:pdv*(odb/100)};
+}
+// Ulazne stavke razvrstane po PDV razdoblju (uzima u obzir pomak razdoblja na stavci)
+function pdvSveUlazne(){
+  var out=[]; for (var i=0;i<12;i++) out.push([]);
+  var kats=pdvKategorije();
+  for (var ki=0; ki<kats.length; ki++) {
+    var katId=kats[ki], mj=TD[katId]; if (!mj) continue;
+    for (var m=0;m<12;m++) {
+      var rows=mj[m]||[];
+      for (var i2=0;i2<rows.length;i2++) {
+        var r=rows[i2];
+        if (!(parseFloat(r.iznos)>0)) continue;
+        var per=(r.pdvm!==undefined && r.pdvm!==null && r.pdvm!=='') ? parseInt(r.pdvm,10) : m;
+        if (!(per>=0 && per<12)) per=m;
+        var s=pdvStavka(katId,r);
+        s.kat=katId; s.katLbl=pdvKatLbl(katId);
+        s.datum=r.datum||''; s.opis=r.tvrtka||'';
+        s.izvorniM=m; s.ri=i2; s.per=per; s.pomak=(per!==m);
+        out[per].push(s);
+      }
+    }
+  }
+  return out;
+}
+// Izlazni računi + dnevni vending promet za mjesec
+function pdvIzlazne(m){
+  var out=[];
+  var rows=(TD['prihodi26'] && TD['prihodi26'][m]) || [];
+  for (var i=0;i<rows.length;i++) {
+    var r=rows[i], b=parseFloat(r.iznos)||0; if (!(b>0)) continue;
+    var o=b/(1+PDVK.stopa/100);
+    out.push({datum:r.datum||'', opis:r.tvrtka||'Izlazni račun', bruto:b, osn:o, pdv:b-o, vrsta:'racun'});
+  }
+  var vend=parseFloat((P.prihodi_vending&&P.prihodi_vending[m])||0);
+  if (vend>0) {
+    var vo=vend/(1+PDVK.stopa/100);
+    out.push({datum:'', opis:'Vending prodaja (dnevni promet)', bruto:vend, osn:vo, pdv:vend-vo, vrsta:'vending'});
+  }
+  return out;
+}
+function pdvCalcMonthly() {
+  var ul=pdvSveUlazne(), out=[];
+  for (var m=0;m<12;m++) {
+    var iz=pdvIzlazne(m), izlOsn=0, izlPdv=0, izlBruto=0;
+    for (var i=0;i<iz.length;i++) { izlOsn+=iz[i].osn; izlPdv+=iz[i].pdv; izlBruto+=iz[i].bruto; }
+    var ulOsn=0, ulPdv=0, ulBruto=0, ulIzvan=0;
+    for (var j=0;j<ul[m].length;j++) {
+      var x=ul[m][j]; ulBruto+=x.bruto;
+      if (x.tip==='dom') { ulOsn+=x.osn; ulPdv+=x.priznato; } else ulIzvan+=x.bruto;
+    }
+    var dod=parseFloat(PDVK.dod[m])||0;
+    // Uplata obveze: rubrika "Državni proračun PDV" u idućem mjesecu
+    var upl=0;
+    if (m<11 && TD['pdv'] && TD['pdv'][m+1]) {
+      var pr=TD['pdv'][m+1];
+      for (var k=0;k<pr.length;k++) upl+=parseFloat(pr[k].iznos)||0;
+    }
+    out.push({m:m, izl:iz, ul:ul[m], izlOsn:izlOsn, izlPdv:izlPdv, izlBruto:izlBruto,
+      ulOsn:ulOsn, ulPdv:ulPdv, ulBruto:ulBruto, ulIzvan:ulIzvan, dod:dod,
+      razlika:izlPdv-ulPdv+dod, uplaceno:upl,
+      prihodBruto:izlBruto, ulazBruto:ulBruto});
   }
   return out;
 }
 function pdvRok(m) {
-  // Rok uplate: zadnji dan mjeseca nakon obračunskog razdoblja
+  // Rok uplate i predaje obrasca: zadnji dan mjeseca nakon obračunskog razdoblja
   var d=new Date(2026, m+2, 0);
   return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+'.2026.';
 }
 
+// ── uređivanje pojedine stavke iz obračuna ──
+function pdvStavkaTip(kat, m, ri, val){
+  if (!TD[kat] || !TD[kat][m] || !TD[kat][m][ri]) return;
+  if (val) TD[kat][m][ri].pdvt=val; else delete TD[kat][m][ri].pdvt;
+  saveAll(); renderPDV();
+}
+function pdvStavkaRazd(kat, m, ri, val){
+  if (!TD[kat] || !TD[kat][m] || !TD[kat][m][ri]) return;
+  if (val==='') delete TD[kat][m][ri].pdvm; else TD[kat][m][ri].pdvm=parseInt(val,10);
+  saveAll(); renderPDV();
+}
+
+// ── POSTAVKE PDV-a (donji list) ──
+function pdvPostavkeSheet(){
+  var kats=pdvKategorije().slice().sort(function(a,b){ return pdvKatLbl(a).localeCompare(pdvKatLbl(b),'hr'); });
+  var red='';
+  for (var i=0;i<kats.length;i++) {
+    var id=kats[i], p=pdvKatPost(id);
+    var sel='<select onchange="pdvPostTip(\''+id+'\',this.value)" style="width:100%;font-size:11px;padding:2px 3px">'+
+      ['dom','ino','bez'].map(function(t){ return '<option value="'+t+'"'+(p.t===t?' selected':'')+'>'+PDV_TIP_LBL[t]+'</option>'; }).join('')+'</select>';
+    red+='<tr><td class="lbl" style="font-size:11px">'+pdvKatLbl(id)+'</td>'+
+      '<td style="padding:3px;width:104px">'+sel+'</td>'+
+      '<td style="padding:3px;width:62px"><input type="number" min="0" max="25" step="1" value="'+p.s+'" onchange="pdvPostStopa(\''+id+'\',this.value)" style="width:52px;font-size:11px;padding:2px 3px;text-align:right"></td>'+
+      '<td style="padding:3px;width:62px"><input type="number" min="0" max="100" step="5" value="'+p.o+'" onchange="pdvPostOdb(\''+id+'\',this.value)" style="width:52px;font-size:11px;padding:2px 3px;text-align:right"></td></tr>';
+  }
+  var izn='';
+  for (var j=0;j<PDVK.izn.length;j++) {
+    var x=PDVK.izn[j];
+    izn+='<tr><td style="padding:3px"><input type="text" value="'+String(x.p||'').replace(/"/g,'&quot;')+'" onchange="pdvIznRijec('+j+',this.value)" style="width:100%;text-align:left;font-size:11px;padding:2px 6px"></td>'+
+      '<td style="padding:3px"><select onchange="pdvIznTip('+j+',this.value)" style="width:100%">'+
+      ['dom','ino','bez'].map(function(t){ return '<option value="'+t+'"'+(x.t===t?' selected':'')+'>'+PDV_TIP_LBL[t]+'</option>'; }).join('')+'</select></td>'+
+      '<td style="padding:3px;text-align:center"><button class="del-btn" onclick="pdvIznBrisi('+j+')">&times;</button></td></tr>';
+  }
+  var html=
+    '<div class="rsf-grab"></div>'+
+    '<div class="rsf-head"><div><div class="rsf-kicker">PDV</div><div class="rsf-title">Postavke obračuna</div></div>'+
+    '<button type="button" class="rsf-x" onclick="closeModal()" aria-label="Zatvori">'+RS_ICO.x+'</button></div>'+
+    '<div class="rsf-body">'+
+      '<div class="rsf-cap">Po rubrici</div>'+
+      '<div class="tbl-wrap" style="overflow-x:auto"><table style="min-width:0;width:100%;table-layout:fixed"><thead><tr><th class="left">Rubrika</th><th class="left">Tip</th><th>Stopa</th><th>Odbitak</th></tr></thead><tbody>'+red+'</tbody></table></div>'+
+      '<div class="rsf-foot-note"><b>Domaći</b> = račun hrvatskog dobavljača s PDV-om, pretporez se priznaje. <b>Ino</b> = strani dobavljač ili uvoz — nema domaćeg pretporeza. <b>Bez PDV-a</b> = plaće, doprinosi, pozajmice, bankovni troškovi, uplata PDV-a.</div>'+
+      '<div class="rsf-cap">Iznimke po ključnoj riječi u opisu</div>'+
+      '<div class="tbl-wrap" style="overflow-x:auto"><table style="min-width:0;width:100%;table-layout:fixed"><thead><tr><th class="left">Ključna riječ</th><th class="left">Tip</th><th></th></tr></thead><tbody>'+izn+'</tbody></table></div>'+
+      '<div style="margin-top:8px"><button class="add-btn" onclick="pdvIznDodaj()">+ Dodaj iznimku</button></div>'+
+      '<div class="rsf-foot-note">Ako opis stavke sadrži ključnu riječ, njezin tip nadjačava postavku rubrike. Ručno postavljen tip na stavci nadjačava i iznimku.</div>'+
+    '</div>'+
+    '<div class="rsf-actions"><span></span><div class="rsf-act-r">'+
+      '<button type="button" class="rsf-btn ghost" onclick="pdvPostavkeReset()">Vrati tvorničko</button>'+
+      '<button type="button" class="rsf-btn pri" onclick="closeModal();renderPDV();">Gotovo</button></div></div>';
+  rsfOtvori(html);
+}
+function pdvPostOsig(id){ if (!PDVK.kat[id]) { var p=pdvKatPost(id); PDVK.kat[id]={t:p.t,s:p.s,o:p.o}; } return PDVK.kat[id]; }
+function pdvPostTip(id,v){ var k=pdvPostOsig(id); k.t=v; if (v!=='dom') { k.s=0; k.o=0; } else { if(!k.s) k.s=PDVK.stopa; if(!k.o) k.o=100; } pdvSpremi(); pdvPostavkeSheet(); }
+function pdvPostStopa(id,v){ var k=pdvPostOsig(id); k.s=parseFloat(v)||0; pdvSpremi(); }
+function pdvPostOdb(id,v){ var k=pdvPostOsig(id); k.o=parseFloat(v)||0; pdvSpremi(); }
+function pdvIznRijec(i,v){ if (PDVK.izn[i]) { PDVK.izn[i].p=String(v||'').trim(); pdvSpremi(); } }
+function pdvIznTip(i,v){ if (PDVK.izn[i]) { PDVK.izn[i].t=v; pdvSpremi(); } }
+function pdvIznBrisi(i){ PDVK.izn.splice(i,1); pdvSpremi(); pdvPostavkeSheet(); }
+function pdvIznDodaj(){ PDVK.izn.push({p:'', t:'bez'}); pdvSpremi(); pdvPostavkeSheet(); }
+function pdvPostavkeReset(){
+  pnConfirm('Vratiti tvorničke postavke PDV-a?','Postavke po rubrikama i iznimke vraćaju se na početno stanje.').then(function(ok){
+    if (!ok) return;
+    PDVK.stopa=25; PDVK.kat={}; PDVK.izn=[];
+    for (var k in PDV_DEF_KAT) PDVK.kat[k]={t:PDV_DEF_KAT[k].t, s:PDV_DEF_KAT[k].s, o:PDV_DEF_KAT[k].o};
+    for (var i=0;i<PDV_DEF_IZN.length;i++) PDVK.izn.push({p:PDV_DEF_IZN[i].p, t:PDV_DEF_IZN[i].t});
+    pdvSpremi(); pdvPostavkeSheet();
+  });
+}
+
+// ── PRIKAZ ──
+function pdvTipZnak(tip){
+  return '<span style="font-size:10px;font-weight:600;color:'+(PDV_TIP_BOJA[tip]||'var(--label3)')+'">'+(PDV_TIP_LBL[tip]||tip)+'</span>';
+}
 function renderPDV() {
   var calc=pdvCalcMonthly();
-  var mi = (TS['pdv']!==undefined) ? TS['pdv'] : 0;
+  var mi=(TS['pdv']!==undefined) ? TS['pdv'] : 0;
   var cur=calc[mi];
-  var godTot={izlPdv:0, ulPdv:0, razlika:0};
-  calc.forEach(function(x){ godTot.izlPdv+=x.izlPdv; godTot.ulPdv+=x.ulPdv; godTot.razlika+=x.razlika; });
 
-  var h='<div class="sec-title">PDV obra\u010dun \u2014 '+MNAMES[mi]+' 2026 <span style="font-size:10px;color:var(--label3);font-weight:400">(simulacija, stopa 25%)</span></div>';
-  h+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">';
+  var h='<div class="sec-title">PDV obračun — '+MNAMES[mi]+' 2026 '+
+    '<span style="font-size:10px;color:var(--label3);font-weight:400">(po datumu računa, stopa '+PDVK.stopa+'%)</span>'+
+    '<button class="add-btn" style="float:right" onclick="pdvPostavkeSheet()">Postavke PDV-a</button></div>';
+
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:16px">';
   h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3)">Osnovica prihoda</div><div style="font-size:18px;font-weight:700">'+fmt2(cur.izlOsn)+' EUR</div></div>';
   h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3)">Izlazni PDV</div><div style="font-size:18px;font-weight:700;color:var(--green)">'+fmt2(cur.izlPdv)+' EUR</div></div>';
-  h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3)">Pretporez (ulazni PDV)</div><div style="font-size:18px;font-weight:700;color:var(--red)">'+fmt2(cur.ulPdv)+' EUR</div></div>';
+  h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3)">Pretporez (priznati)</div><div style="font-size:18px;font-weight:700;color:var(--red)">'+fmt2(cur.ulPdv)+' EUR</div>'+
+     '<div style="font-size:10px;color:var(--label3);margin-top:2px">od '+fmt2(cur.ulBruto)+' EUR ulaznih, izvan pretporeza '+fmt2(cur.ulIzvan)+'</div></div>';
   h+='<div class="card" style="padding:14px 16px;border-left:3px solid '+(cur.razlika>=0?'var(--red)':'var(--green)')+'"><div style="font-size:11px;color:var(--label3)">'+(cur.razlika>=0?'Za uplatu':'Preneseni pretporez')+'</div><div style="font-size:18px;font-weight:700;color:'+(cur.razlika>=0?'var(--red)':'var(--green)')+'">'+fmt2(Math.abs(cur.razlika))+' EUR</div><div style="font-size:10px;color:var(--label3);margin-top:2px">Rok: '+pdvRok(mi)+'</div></div>';
+  var ost=cur.razlika-cur.uplaceno, platio=(cur.razlika>0.005 && Math.abs(ost)<=0.01);
+  h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3)">Uplaćeno'+(mi<11?' u '+MNAMES[mi+1]:'')+'</div>'+
+     '<div style="font-size:18px;font-weight:700;color:'+(platio?'var(--green)':'var(--label)')+'">'+fmt2(cur.uplaceno)+' EUR</div>'+
+     '<div style="font-size:10px;color:'+(platio?'var(--green)':'var(--label3)')+';margin-top:2px">'+
+       (cur.razlika<=0.005 ? 'nema obveze' : (platio ? 'obveza zatvorena' : (cur.uplaceno>0 ? 'ostaje '+fmt2(ost)+' EUR' : 'nije uplaćeno')))+'</div></div>';
   h+='</div>';
 
   h+='<div class="month-picker">';
   for (var _mi=0;_mi<12;_mi++) {
-    var has=calc[_mi].izlPdv||calc[_mi].ulPdv;
-    h+='<button class="mbtn'+(has?' has':'')+(_mi===mi?' act':'')+'" onclick="TS[\'pdv\']='+_mi+';renderPDV();">'+MONTHS[_mi]+'</button>';
+    var has=calc[_mi].izlPdv||calc[_mi].ulBruto;
+    h+='<button class="mbtn'+(has?' has':'')+(_mi===mi?' act':'')+'" onclick="switchMonth(\'pdv\','+_mi+')">'+MONTHS[_mi]+'</button>';
   }
   h+='</div>';
 
-  h+='<div class="tbl-wrap" style="margin-bottom:18px"><table><thead><tr><th class="left">Stavka obra\u010duna</th>';
+  // ── godišnji pregled ──
+  h+='<div class="tbl-wrap" style="margin-bottom:18px"><table><thead><tr><th class="left">Stavka obračuna</th>';
   for (var _mj=0;_mj<12;_mj++) h+='<th>'+MONTHS[_mj]+'</th>';
   h+='<th>UKUPNO</th></tr></thead><tbody>';
-  function pdvRow(lbl, key, color) {
-    var row='<tr><td class="lbl">'+lbl+'</td>';
-    var tot=0;
-    for (var _k=0;_k<12;_k++) { var v=calc[_k][key]; tot+=v; row+='<td class="num" style="color:'+(v?color:'var(--label4)')+'">'+(v?fmt2(v):'\u2014')+'</td>'; }
+  function pdvRow(lbl, key, color, bold) {
+    var row='<tr'+(bold?' class="total-row"':'')+'><td class="'+(bold?'lbl-bold':'lbl')+'">'+lbl+'</td>', tot=0;
+    for (var _k=0;_k<12;_k++) {
+      var v=calc[_k][key]; tot+=v;
+      row+='<td class="num" style="color:'+(v?color:'var(--label4)')+(bold?';font-weight:700':'')+'">'+(v?fmt2(v):'—')+'</td>';
+    }
     row+='<td class="num" style="font-weight:700">'+fmt2(tot)+'</td></tr>';
     return row;
   }
   h+=pdvRow('Osnovica prihoda','izlOsn','var(--label)');
   h+=pdvRow('Izlazni PDV','izlPdv','var(--green)');
-  h+=pdvRow('Osnovica tro\u0161kova','ulOsn','var(--label)');
-  h+=pdvRow('Pretporez','ulPdv','var(--red)');
+  h+=pdvRow('Ulazni računi (bruto)','ulBruto','var(--label)');
+  h+=pdvRow('Osnovica — domaći računi','ulOsn','var(--label)');
+  h+=pdvRow('Izvan pretporeza (ino / bez PDV-a)','ulIzvan','var(--label3)');
+  h+=pdvRow('Pretporez (priznati)','ulPdv','var(--red)');
   h+='<tr class="total-row"><td class="lbl-bold">Razlika (za uplatu)</td>';
   var totRaz=0;
-  for (var _k2=0;_k2<12;_k2++) { var v2=calc[_k2].razlika; totRaz+=v2; h+='<td class="num" style="color:'+(v2>=0?'var(--red)':'var(--green)')+';font-weight:700">'+(v2?fmt2(v2):'\u2014')+'</td>'; }
+  for (var _k2=0;_k2<12;_k2++) { var v2=calc[_k2].razlika; totRaz+=v2; h+='<td class="num" style="color:'+(v2>=0?'var(--red)':'var(--green)')+';font-weight:700">'+(v2?fmt2(v2):'—')+'</td>'; }
   h+='<td class="num" style="font-weight:700">'+fmt2(totRaz)+'</td></tr>';
+  h+=pdvRow('Uplaćeno','uplaceno','var(--blue)');
   h+='</tbody></table></div>';
 
-  h+='<div style="font-size:11px;color:var(--label3);margin-bottom:16px;line-height:1.6">\u2139 Ovo je pojednostavljena simulacija za informativne svrhe: pretpostavlja se da su prihodi i navedeni tro\u0161kovi iskazani s ura\u010dunatim PDV-om po stopi od 25%, te da su Pla\u0107e, Pozajmice i PDV pla\u0107anja izuzeti iz obra\u010duna pretporeza. Za slu\u017ebeni PDV obrazac konzultirajte knjigovodstvo.</div>';
+  // ── detalj: izlazni računi ──
+  h+='<div class="sec-title">Izlazni računi (IRA) — '+MNAMES[mi]+'</div>';
+  h+='<div class="tbl-wrap" style="margin-bottom:18px"><table><thead><tr><th class="left">Datum</th><th class="left">Opis</th><th>Bruto</th><th>Osnovica</th><th>PDV</th></tr></thead><tbody>';
+  if (!cur.izl.length) h+='<tr><td colspan="5" style="padding:14px;text-align:center;color:var(--label3);font-size:11px">Nema prihoda u ovom mjesecu.</td></tr>';
+  for (var a=0;a<cur.izl.length;a++) {
+    var x=cur.izl[a];
+    h+='<tr><td class="lbl" style="font-size:11px;white-space:nowrap">'+(x.datum||'—')+'</td>'+
+      '<td class="lbl" style="font-size:11px">'+x.opis+'</td>'+
+      '<td class="num">'+fmt2(x.bruto)+'</td><td class="num">'+fmt2(x.osn)+'</td>'+
+      '<td class="num" style="color:var(--green)">'+fmt2(x.pdv)+'</td></tr>';
+  }
+  h+='<tr class="total-row"><td colspan="2" class="lbl-bold">UKUPNO</td><td class="num" style="font-weight:700">'+fmt2(cur.izlBruto)+'</td><td class="num" style="font-weight:700">'+fmt2(cur.izlOsn)+'</td><td class="num" style="font-weight:700;color:var(--green)">'+fmt2(cur.izlPdv)+'</td></tr>';
+  h+='</tbody></table></div>';
+
+  // ── detalj: ulazni računi ──
+  h+='<div class="sec-title">Ulazni računi (URA) — '+MNAMES[mi]+'</div>';
+  h+='<div class="tbl-wrap" style="margin-bottom:10px"><table><thead><tr><th class="left">Datum</th><th class="left">Dobavljač / opis</th><th class="left">Rubrika</th><th>Bruto</th><th class="left">Tip</th><th>Osnovica</th><th>Pretporez</th><th class="left">PDV razdoblje</th></tr></thead><tbody>';
+  var ulSort=cur.ul.slice().sort(function(p,q){ return String(p.datum).split('.').reverse().join('').localeCompare(String(q.datum).split('.').reverse().join('')); });
+  if (!ulSort.length) h+='<tr><td colspan="8" style="padding:14px;text-align:center;color:var(--label3);font-size:11px">Nema ulaznih računa u ovom razdoblju.</td></tr>';
+  for (var b=0;b<ulSort.length;b++) {
+    var y=ulSort[b];
+    var tipSel='<select onchange="pdvStavkaTip(\''+y.kat+'\','+y.izvorniM+','+y.ri+',this.value)" style="font-size:10px;padding:1px 2px">'+
+      '<option value=""'+(y.rucno?'':' selected')+'>auto · '+PDV_TIP_LBL[y.tip]+'</option>'+
+      ['dom','ino','bez'].map(function(t){ return '<option value="'+t+'"'+(y.rucno&&y.tip===t?' selected':'')+'>'+PDV_TIP_LBL[t]+'</option>'; }).join('')+'</select>';
+    var razdSel='<select onchange="pdvStavkaRazd(\''+y.kat+'\','+y.izvorniM+','+y.ri+',this.value)" style="font-size:10px;padding:1px 2px">'+
+      '<option value=""'+(y.pomak?'':' selected')+'>'+MNAMES[y.izvorniM]+' (račun)</option>';
+    for (var c=0;c<12;c++) razdSel+='<option value="'+c+'"'+(y.pomak&&y.per===c?' selected':'')+'>'+MNAMES[c]+'</option>';
+    razdSel+='</select>';
+    h+='<tr'+(y.pomak?' style="background:rgba(255,149,0,.07)"':'')+'>'+
+      '<td class="lbl" style="font-size:11px;white-space:nowrap">'+(y.datum||'—')+'</td>'+
+      '<td class="lbl" style="font-size:11px">'+(y.opis||'—')+'</td>'+
+      '<td class="lbl" style="font-size:10px;color:var(--label3)">'+y.katLbl+'</td>'+
+      '<td class="num">'+fmt2(y.bruto)+'</td>'+
+      '<td style="padding:2px 4px">'+tipSel+'</td>'+
+      '<td class="num" style="color:'+(y.tip==='dom'?'var(--label)':'var(--label4)')+'">'+(y.tip==='dom'?fmt2(y.osn):'—')+'</td>'+
+      '<td class="num" style="color:'+(y.priznato?'var(--red)':'var(--label4)')+'">'+(y.priznato?fmt2(y.priznato):'—')+'</td>'+
+      '<td style="padding:2px 4px">'+razdSel+'</td></tr>';
+  }
+  h+='<tr class="total-row"><td colspan="3" class="lbl-bold">UKUPNO</td><td class="num" style="font-weight:700">'+fmt2(cur.ulBruto)+'</td><td></td>'+
+     '<td class="num" style="font-weight:700">'+fmt2(cur.ulOsn)+'</td><td class="num" style="font-weight:700;color:var(--red)">'+fmt2(cur.ulPdv)+'</td><td></td></tr>';
+  h+='</tbody></table></div>';
+
+  h+='<div style="font-size:11px;color:var(--label3);margin-bottom:16px;line-height:1.6">ℹ PDV se računa po svakoj stavci. Pretporez se priznaje samo na domaćim računima; ino nabava (uvoz, strane usluge) i stavke bez PDV-a (plaće, doprinosi, pozajmice, bankovni troškovi, uplata PDV-a) ne ulaze u pretporez. Tip svake stavke može se promijeniti u stupcu <b>Tip</b>, a račun zaprimljen s zakašnjenjem prebacuje se u drugo razdoblje u stupcu <b>PDV razdoblje</b>. Postavke po rubrikama uređuju se gumbom <b>Postavke PDV-a</b>.</div>';
+
+  h+='<div class="sec-title">Uplate PDV-a (Državni proračun PDV)</div>';
 
   renderTrans('pdv');
   var pane=document.getElementById('tab-pdv');
-  pane.insertAdjacentHTML('afterbegin', h);
+  if (pane) pane.insertAdjacentHTML('afterbegin', h);
 }
 
 // ── SVIJETLA / TAMNA TEMA ──
@@ -6606,7 +6889,7 @@ function potvrdiIzlazneRacune() {
 
 
 // ── KOMPLETAN JSON BACKUP (izvoz/uvoz svih podataka aplikacije) ──
-var PN_BACKUP_KEYS = ['pn_p_full','pn_td','pn_rows','pn_custom_map','pn_settings','pn_logo',
+var PN_BACKUP_KEYS = ['pn_p_full','pn_td','pn_rows','pn_custom_map','pn_settings','pn_logo','pn_pdv',
   'pn_daily_artikli','pn_daily_artikli_ap','pn_aparati','pn_aparat_akt',
   'pn_djel_sati','pn_zaposlenici','pn_zaposlenici_info','pn_rules','pn_izvod_potpisi','pn_cf_bal_'];
 
@@ -6947,6 +7230,7 @@ var SB_NAZIVI={
   'pn_p':'Iznosi po rubrikama (kopija)',
   'pn_rows':'Popis rubrika',
   'pn_custom_map':'Vlastite rubrike',
+  'pn_pdv':'Postavke PDV obra\u010duna',
   'pn_settings':'Postavke tvrtke',
   'pn_logo':'Logo',
   'pn_daily':'Prodaja po danima',
