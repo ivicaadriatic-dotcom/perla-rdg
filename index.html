@@ -1197,7 +1197,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026</div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v148</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1329,6 +1329,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
+var PN_VERZIJA = 'v148';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -1421,7 +1422,7 @@ var ROWS_DEF = [
   {key:'tel_s',         lbl:'Telefon',                  sec:'fiksni'},
   {key:'inet_s',        lbl:'Internet',                 sec:'fiksni'},
   {key:'razno_s',       lbl:'Ostali tro\u0161kovi',          sec:'ostali'},
-  {key:'pozajmice_s',   lbl:'Pozajmice',                sec:'ostali'}
+  {key:'pozajmice_s',   lbl:'Pozajmice',                sec:'financ'}
 ];
 
 var TAB_TO_P = {
@@ -1514,7 +1515,9 @@ var TD = (function() {
   try { if (promjena) localStorage.setItem('pn_td', JSON.stringify(TD)); localStorage.setItem(FLAG,'1'); } catch(e) {}
 })();
 var TS = {};
-for (var _i=0; _i<TD_TABS.length; _i++) TS[TD_TABS[_i]] = 0;
+// Rubrike se otvaraju na teku\u0107em mjesecu \u2014 tamo se i unosi.
+var PN_MJ_SAD = (function(){ var m=new Date().getMonth(); return (m>=0&&m<12)?m:0; })();
+for (var _i=0; _i<TD_TABS.length; _i++) TS[TD_TABS[_i]] = PN_MJ_SAD;
 
 var activeTab = 'dash';
 
@@ -2056,7 +2059,7 @@ function renderRDG() {
 
   // Sortiraj ROWS po sekcijama
   var secOrder={'place':0,'fiksni':1,'ostali':2};
-  var sortedRows=ROWS.slice().sort(function(a,b){return (secOrder[a.sec]||0)-(secOrder[b.sec]||0);});
+  var sortedRows=ROWS.slice().filter(function(r){return r.sec!=='financ';}).sort(function(a,b){return (secOrder[a.sec]||0)-(secOrder[b.sec]||0);});
   var prev=null;
   var accentPalette=['#22c55e','#2b5088','#f59e0b','#8b5cf6','#0d9488','#ef4444','#c8a951'];
   var accentIdx=0;
@@ -2100,7 +2103,26 @@ function renderRDG() {
   h+='<tr class="dobit-row" data-subtotal="dobit"><td class="lbl-bold">DOBIT PRIJE OPOREZIVANJA</td>';
   for (i=0; i<12; i++) h+='<td class="num" style="color:'+(tD[i]>=0?'#4ade80':'#f87171')+';font-weight:700">'+(tD[i]?(tD[i]<0?'-':'')+fmt2(tD[i]):'—')+'</td>';
   h+='<td class="num" style="color:'+(totD>=0?'#4ade80':'#f87171')+';font-weight:700">'+(totD<0?'-':'')+fmt2(totD)+'</td></tr>';
+  // FINANCIRANJE \u2014 pozajmice vlasnika nisu prihod ni rashod poslovanja,
+  // nego novac koji ulazi u tvrtku i iz nje izlazi. Prikazuju se, ali ne ulaze u rezultat.
+  var finK=getKeys('financ');
+  if (finK.length) {
+    var tFin=mk12(), totFin=0;
+    for (i=0;i<12;i++) { for (j=0;j<finK.length;j++) tFin[i]+=getRowVal(finK[j],i); totFin+=tFin[i]; }
+    if (totFin) {
+      h+='<tr class="sec-row"><td colspan="14" style="color:#c8a951">FINANCIRANJE \u2014 NE ULAZI U REZULTAT</td></tr>';
+      for (var fi=0; fi<finK.length; fi++) {
+        var fKey=finK[fi];
+        var fRow=ROWS.filter(function(r){return r.key===fKey;})[0]||{lbl:fKey};
+        var fArr=P[fKey]||mk12(), fTot=sumA(fArr);
+        h+='<tr><td class="lbl">'+rowBar('#c8a951')+String(fRow.lbl||fKey).toUpperCase()+'</td>';
+        for (i=0;i<12;i++) h+=numPlain(fArr[i], '#c8a951', ROWKEY_TO_CAT[fKey]);
+        h+='<td class="num" style="font-weight:600">'+(fTot?fmt2(fTot):'\u2014')+'</td></tr>';
+      }
+    }
+  }
   h+='</tbody></table></div>';
+  h+='<div style="font-size:11px;color:var(--label3);margin-top:-8px;line-height:1.6">\u2139 Pozajmice vlasnika vode se kao <b>financiranje</b>: to je obveza prema vlasniku, a ne tro\u0161ak poslovanja, pa ne ulaze u rashode ni u dobit/gubitak. Vidljive su kao zaseban redak na dnu.</div>';
 
   var tab=document.getElementById('tab-rdg');
   tab.innerHTML=h;
@@ -2738,7 +2760,7 @@ function renderPostavke() {
   try { korekcijaGotova = !!localStorage.getItem('pn_korekcija_hazelnut_20260916'); } catch(e) {}
 
   el.innerHTML = '<div class="pst">' +
-    '<div class="pst-head"><h2>Postavke</h2><p>Podaci o tvrtki, logo i upravljanje podacima aplikacije</p></div>' +
+    '<div class="pst-head"><h2>Postavke</h2><p>Podaci o tvrtki, logo i upravljanje podacima aplikacije<br><b>Verzija aplikacije: '+PN_VERZIJA+'</b></p></div>' +
 
     // \u2500\u2500 Podaci o tvrtki \u2500\u2500
     '<section class="pst-card">' +
@@ -4229,8 +4251,8 @@ function renderCashflow() {
   h+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">';
   h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3);margin-bottom:5px">Priljev u tjednu</div><div style="font-size:19px;font-weight:700;color:var(--green)">'+fmt2(wIn)+' EUR</div><div style="font-size:10px;color:var(--label3);margin-top:3px">'+cfLabel()+'</div></div>';
   h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3);margin-bottom:5px">Odljev u tjednu</div><div style="font-size:19px;font-weight:700;color:var(--red)">'+fmt2(wOut+wLoan)+' EUR</div><div style="font-size:10px;color:var(--label3);margin-top:3px">Tro\u0161kovi + pozajmice</div></div>';
-  h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3);margin-bottom:5px">Neto nov\u010dani tijek</div><div style="font-size:19px;font-weight:700;color:'+(wNet>=0?'var(--green)':'var(--red)')+'">'+fmt2(wNet)+' EUR</div><div style="font-size:10px;color:var(--label3);margin-top:3px">'+(isCur?'aktivni tjedan':'drugi tjedan')+'</div></div>';
-  h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3);margin-bottom:5px">Stanje na kraju tjedna</div><div style="font-size:19px;font-weight:700;color:'+(stKraj==null?'var(--label3)':(stKraj>=0?'var(--green)':'var(--red)'))+'">'+(stKraj==null?'\u2014':fmt2(stKraj)+' EUR')+'</div><div style="font-size:10px;color:var(--label3);margin-top:3px">'+(stKraj==null?'upi\u0161i po\u010detno stanje':'po\u010detno: '+fmt2(V.bgn[0])+' EUR')+'</div></div>';
+  h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3);margin-bottom:5px">Neto nov\u010dani tijek</div><div style="font-size:19px;font-weight:700;color:'+(wNet>=0?'var(--green)':'var(--red)')+'">'+(wNet<0?'\u2212':'')+fmt2(wNet)+' EUR</div><div style="font-size:10px;color:var(--label3);margin-top:3px">'+(isCur?'aktivni tjedan':'drugi tjedan')+'</div></div>';
+  h+='<div class="card" style="padding:14px 16px"><div style="font-size:11px;color:var(--label3);margin-bottom:5px">Stanje na kraju tjedna</div><div style="font-size:19px;font-weight:700;color:'+(stKraj==null?'var(--label3)':(stKraj>=0?'var(--green)':'var(--red)'))+'">'+(stKraj==null?'\u2014':((stKraj<0?'\u2212':'')+fmt2(stKraj))+' EUR')+'</div><div style="font-size:10px;color:var(--label3);margin-top:3px">'+(stKraj==null?'upi\u0161i po\u010detno stanje':'po\u010detno: '+fmt2(V.bgn[0])+' EUR')+'</div></div>';
   h+='</div>';
 
   // Navigacija tjedna
@@ -5958,7 +5980,7 @@ function renderPDV() {
   var mi=(TS['pdv']!==undefined) ? TS['pdv'] : 0;
   var cur=calc[mi];
 
-  var h='<div class="sec-title">PDV obračun — '+MNAMES[mi]+' 2026 '+
+  var h='<div style="height:10px"></div><div class="sec-title">PDV obračun — '+MNAMES[mi]+' 2026 '+
     '<span style="font-size:10px;color:var(--label3);font-weight:400">(po datumu računa, stopa '+PDVK.stopa+'%)</span>'+
     '<button class="add-btn" style="float:right" onclick="pdvPostavkeSheet()">Postavke PDV-a</button></div>';
 
@@ -5975,12 +5997,6 @@ function renderPDV() {
        (cur.razlika<=0.005 ? 'nema obveze' : (platio ? 'obveza zatvorena' : (cur.uplaceno>0 ? 'ostaje '+fmt2(ost)+' EUR' : 'nije uplaćeno')))+'</div></div>';
   h+='</div>';
 
-  h+='<div class="month-picker">';
-  for (var _mi=0;_mi<12;_mi++) {
-    var has=calc[_mi].izlPdv||calc[_mi].ulBruto;
-    h+='<button class="mbtn'+(has?' has':'')+(_mi===mi?' act':'')+'" onclick="switchMonth(\'pdv\','+_mi+')">'+MONTHS[_mi]+'</button>';
-  }
-  h+='</div>';
 
   // ── godišnji pregled ──
   h+='<div class="tbl-wrap" style="margin-bottom:18px"><table><thead><tr><th class="left">Stavka obračuna</th>';
@@ -6052,11 +6068,9 @@ function renderPDV() {
 
   h+='<div style="font-size:11px;color:var(--label3);margin-bottom:16px;line-height:1.6">ℹ PDV se računa po svakoj stavci. Pretporez se priznaje samo na domaćim računima; ino nabava (uvoz, strane usluge) i stavke bez PDV-a (plaće, doprinosi, pozajmice, bankovni troškovi, uplata PDV-a) ne ulaze u pretporez. Tip svake stavke može se promijeniti u stupcu <b>Tip</b>, a račun zaprimljen s zakašnjenjem prebacuje se u drugo razdoblje u stupcu <b>PDV razdoblje</b>. Postavke po rubrikama uređuju se gumbom <b>Postavke PDV-a</b>.</div>';
 
-  h+='<div class="sec-title">Uplate PDV-a (Državni proračun PDV)</div>';
-
   renderTrans('pdv');
   var pane=document.getElementById('tab-pdv');
-  if (pane) pane.insertAdjacentHTML('afterbegin', h);
+  if (pane) pane.insertAdjacentHTML('beforeend', h);
 }
 
 // ── SVIJETLA / TAMNA TEMA ──
@@ -7436,9 +7450,148 @@ function sbOsvjeziAko(razmakMs){
     });
   } catch(e){}
 }
+// ═══════════════════════════════════════════
+// UGRAĐENA PRAVILA KNJIŽENJA + jednokratni ispravak zatečenih podataka
+// Mora stajati OVDJE, nakon sloja za sinkronizaciju, da se promjena uredno
+// zabilježi za slanje u oblak i da je povlačenje ne pregazi.
+// ═══════════════════════════════════════════
+var PN_UGR_PRAVILA = [
+  {partner:'1201 pdv',                    kat:'pdv'},
+  {partner:'pdv obveza',                  kat:'pdv'},
+  {partner:'naknad',                      kat:'banka'},
+  {partner:'polleo',                      kat:'nabava_proteina'},
+  {partner:'cetus',                       kat:'knjigovodstvo'},
+  {partner:'godaddy',                     kat:'internet'},
+  {partner:'a1 hrvatska',                 kat:'telefon'},
+  {partner:'pozajmic',                    kat:'pozajmice'},
+  {partner:'bilje\u017enik',                 kat:'javni_bilj'},
+  {partner:'hrvatska gospodarska komora', kat:'clanarina_hgk'}
+];
+function pnIspravakPravila(){
+  var FLAG='pn_pravila_ugr_1';
+  try { if (localStorage.getItem(FLAG)) return; } catch(e){}
+  var promjena=false;
+  // Naziv banke stoji u zaglavlju svakog izvoda — kao pravilo bi svaki redak
+  // pretvorio u prihod, pa takvo pravilo ne smije postojati.
+  for (var i=PN_RULES.length-1;i>=0;i--) {
+    var pp=String(PN_RULES[i].partner||'').toLowerCase();
+    if (pp.indexOf('erste')>=0 || pp.indexOf('bank d.d')>=0) { PN_RULES.splice(i,1); promjena=true; }
+  }
+  PN_UGR_PRAVILA.forEach(function(r){
+    var ima=PN_RULES.filter(function(x){ return String(x.partner||'').toLowerCase()===r.partner.toLowerCase(); })[0];
+    if (!ima) { PN_RULES.push({partner:r.partner, kat:r.kat}); promjena=true; }
+  });
+  if (promjena) { savePnRules(); if (typeof pnSyncOznaci==='function') pnSyncOznaci('pn_rules'); }
+  try { localStorage.setItem(FLAG,'1'); } catch(e){}
+}
+function pnIspravakRubrika(){
+  // Zatečene stavke: pozajmica vlasnika nije trošak, a uplata PDV-a pripada
+  // svojoj rubrici. Prebacuje se samo ono što je nedvojbeno prepoznato.
+  var FLAG='pn_prerasp_1';
+  try { if (localStorage.getItem(FLAG)) return; } catch(e){}
+  var pomaknuto=0;
+  function premjesti(iz, u, test){
+    if (!TD[iz] || !TD[u]) return;
+    for (var m=0;m<12;m++){
+      var rows=TD[iz][m]||[], ostaju=[];
+      if (!TD[u][m]) TD[u][m]=[];
+      for (var i=0;i<rows.length;i++){
+        var r=rows[i];
+        if (parseFloat(r.iznos)>0 && test(String(r.tvrtka||''))) { TD[u][m].push(r); pomaknuto++; }
+        else ostaju.push(r);
+      }
+      TD[iz][m]=ostaju.length?ostaju:[{datum:'',iznos:0,tvrtka:'',vpl:'',placeno:''}];
+    }
+  }
+  (function(){
+    var nasao=false, mij=false;
+    for (var _ri=0;_ri<ROWS.length;_ri++) if (ROWS[_ri].key==='pozajmice_s') {
+      nasao=true; if (ROWS[_ri].sec!=='financ') { ROWS[_ri].sec='financ'; mij=true; }
+    }
+    if (!nasao) { ROWS.push({key:'pozajmice_s', lbl:'Pozajmice', sec:'financ'}); mij=true; }
+    if (mij) {
+      try { localStorage.setItem('pn_rows', JSON.stringify(ROWS)); } catch(e){}
+      if (typeof pnSyncOznaci==='function') pnSyncOznaci('pn_rows');
+    }
+  })();
+  premjesti('razno','pozajmice', function(o){ return /pozajmic/i.test(o); });
+  premjesti('razno','pdv',       function(o){ return /1201\s*pdv/i.test(o); });
+  if (pomaknuto) {
+    syncTDtoP('razno'); syncTDtoP('pozajmice'); syncTDtoP('pdv');
+    try {
+      localStorage.setItem('pn_td', JSON.stringify(TD));
+      localStorage.setItem('pn_p', JSON.stringify(P));
+      localStorage.setItem('pn_p_full', JSON.stringify(P));
+    } catch(e){}
+    if (typeof pnSyncOznaci==='function') { pnSyncOznaci('pn_td'); pnSyncOznaci('pn_p'); pnSyncOznaci('pn_p_full'); }
+  }
+  try { localStorage.setItem(FLAG,'1'); } catch(e){}
+}
+
+
+// Obnova redaka izgubljenih pri ranijem preslagivanju rubrika.
+// pn_izvod_potpisi pamti svaki proknjiženi redak izvoda (datum|iznos|opis).
+// Ako takvog iznosa nema nigdje u podacima — ni kao stavka ni kao rata —
+// redak se vraća u rubriku koju određuju pravila knjiženja.
+function pnObnovaIzIzvoda(){
+  var FLAG='pn_obnova_izvod_1';
+  try { if (localStorage.getItem(FLAG)) return; } catch(e){}
+  var vraceno=0, sad=new Date();
+  for (var i=0;i<IZVOD_POTPISI.length;i++) {
+    var d=String(IZVOD_POTPISI[i]||'').split('|'); if (d.length<2) continue;
+    var datum=d[0], iznos=parseFloat(d[1])||0, opis=d.slice(2).join('|');
+    if (!(iznos>0)) continue;
+    var dd=datum.split('.'); if (dd.length<3) continue;
+    var dan=parseInt(dd[0],10), mj=parseInt(dd[1],10)-1, god=parseInt(dd[2],10);
+    if (isNaN(dan)||isNaN(mj)||mj<0||mj>11) continue;
+    var kad=new Date(god, mj, dan);
+    if ((sad-kad)/86400000 > 45 || kad>sad) continue;   // samo zadnjih 45 dana
+    if (pnVecEvidentirano(datum, iznos)) continue;      // već postoji (stavka ili rata)
+    var kat=pravioZaPartnera(opis) || 'razno';
+    if (!TD[kat]) kat='razno';
+    if (!TD[kat][mj]) TD[kat][mj]=[];
+    var dm=String(dan<10?'0'+dan:dan)+'.'+String((mj+1)<10?'0'+(mj+1):(mj+1))+'.';
+    TD[kat][mj].push({datum:dm, iznos:iznos, tvrtka:(opis?opis.toUpperCase():'(iz izvoda)'), vpl:'', placeno:dm, izvod:1});
+    syncTDtoP(kat); vraceno++;
+  }
+  if (vraceno) {
+    try {
+      localStorage.setItem('pn_td', JSON.stringify(TD));
+      localStorage.setItem('pn_p', JSON.stringify(P));
+      localStorage.setItem('pn_p_full', JSON.stringify(P));
+    } catch(e){}
+    if (typeof pnSyncOznaci==='function') { pnSyncOznaci('pn_td'); pnSyncOznaci('pn_p'); pnSyncOznaci('pn_p_full'); }
+  }
+  try { localStorage.setItem(FLAG,'1'); } catch(e){}
+}
+
+// VAŽNO: jednokratni ispravci smiju se pokrenuti tek NAKON povlačenja iz oblaka.
+// Ako se pokrenu prije, uređaj sa zastarjelom kopijom označi svoje stanje kao
+// najnovije, pa pri sljedećem slanju pregazi ispravnu kopiju s drugog uređaja.
+// Upravo tako je nestala uplata PDV-a od 353,60 nakon v147.
+var PN_ISPRAVCI_GOTOVO=false;
+function pnJednokratniIspravci(){
+  if (PN_ISPRAVCI_GOTOVO) return;
+  PN_ISPRAVCI_GOTOVO=true;
+  try { pnIspravakPravila(); } catch(e){}
+  try { pnIspravakRubrika(); } catch(e){}
+  try { pnObnovaIzIzvoda(); } catch(e){}
+  try { if (typeof activeTab!=='undefined' && activeTab && typeof switchTab==='function') switchTab(activeTab); } catch(e){}
+}
+
 // Pri pokretanju: ako je uredjaj prijavljen, povuci sto je novije u oblaku
 (function(){
-  setTimeout(function(){ SB_ZADNJE_POVL=Date.now(); if (sbUkljucen()) { try { sbPovuci(true).then(function(){ sbPosalji(true); }); } catch(e){} } sbChipOsvjezi(); }, 1800);
+  setTimeout(function(){
+    SB_ZADNJE_POVL=Date.now();
+    if (sbUkljucen()) {
+      try { sbPovuci(true).then(function(){ pnJednokratniIspravci(); sbPosalji(true); },
+                               function(){ pnJednokratniIspravci(); }); }
+      catch(e){ pnJednokratniIspravci(); }
+    } else { pnJednokratniIspravci(); }
+    sbChipOsvjezi();
+  }, 1800);
+  // sigurnosna mreža: ako povlačenje zapne, ispravci se svejedno pokrenu
+  setTimeout(function(){ pnJednokratniIspravci(); }, 15000);
   // Povratak u aplikaciju (mobitel iz pozadine, prebacivanje kartica, povratak fokusa)
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) sbOsvjeziAko(20000); });
   window.addEventListener('focus', function(){ sbOsvjeziAko(20000); });
@@ -7801,7 +7954,7 @@ function switchTab(id) {
         for(var _m=0;_m<12;_m++) TD[_r.key].push([{datum:'',iznos:0,tvrtka:'',vpl:'',placeno:''}]);
       }
       // Inicijaliziraj TS (aktivni mjesec = 0)
-      if (TS[_r.key]===undefined) TS[_r.key]=0;
+      if (TS[_r.key]===undefined) TS[_r.key]=(typeof PN_MJ_SAD!=='undefined'?PN_MJ_SAD:0);
       // Dodaj u TAB_TO_P
       TAB_TO_P[_r.key]=_r.key;
       // Kreiraj tab pane div u HTML-u
@@ -8148,9 +8301,9 @@ function obrisiArtiklUnos(dateISO, artikl) {
 // \u2500\u2500 Apple sheet: Uredi stavke RDG-a \u2500\u2500
 function openRowEditor() {
   var ex=document.getElementById('rowEditorModal'); if(ex) ex.remove();
-  var secCols={place:'#ff9500', fiksni:'#007aff', ostali:'#af52de'};
-  var secLbls={place:'Pla\u0107e djelatnika', fiksni:'Fiksni tro\u0161kovi', ostali:'Ostali tro\u0161kovi'};
-  var secOrder=['place','fiksni','ostali'];
+  var secCols={place:'#ff9500', fiksni:'#007aff', ostali:'#af52de', financ:'#c8a951'};
+  var secLbls={place:'Pla\u0107e djelatnika', fiksni:'Fiksni tro\u0161kovi', ostali:'Ostali tro\u0161kovi', financ:'Financiranje (ne ulazi u rezultat)'};
+  var secOrder=['place','fiksni','ostali','financ'];
   var h='<div class="rsf-grab"></div>'+
     '<div class="rsf-head"><div><div class="rsf-kicker">Ra\u010dun D i G</div><div class="rsf-title">Uredi stavke</div></div>'+
     '<button type="button" class="rsf-x" onclick="zatvoriRowEditor()" aria-label="Zatvori">'+RS_ICO.x+'</button></div>'+
@@ -8752,7 +8905,7 @@ function izvRDG(){
   var red=function(lbl,arr){ var s=0; var r=[lbl]; mj.forEach(function(i){ s+=arr[i]||0; r.push(fmt2(arr[i]||0)); }); r.push(fmt2(s)); return r; };
   var rows=[head, red('Prihodi', c.prihodi), red('Rashodi', c.rashodi), red('Dobit / gubitak', c.dobit)];
   // detalji po stavkama
-  ['place','fiksni','ostali'].forEach(function(sec){
+  ['place','fiksni','ostali','financ'].forEach(function(sec){
     getKeys(sec).forEach(function(k){
       var arr=[]; for (var i=0;i<12;i++) arr.push(getRowVal(k,i)||0);
       var ima=false; mj.forEach(function(i){ if(arr[i]) ima=true; });
