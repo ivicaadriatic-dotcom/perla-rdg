@@ -1197,7 +1197,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v148</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v149</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1329,7 +1329,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v148';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v149';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -2287,6 +2287,7 @@ function renderTrans(id) {
     (function(btn) {
       btn.addEventListener('click', function() {
         var id2=this.dataset.id, ri=parseInt(this.dataset.r,10), mo=TS[id2];
+        try { pnZaboraviPotpis(TD[id2][mo][ri]); } catch(e){}
         TD[id2][mo].splice(ri,1);
         if (!TD[id2][mo].length) TD[id2][mo].push({datum:'',iznos:0,tvrtka:'',vpl:'',placeno:''});
         syncTDtoP(id2); saveAll(); rerenderTransTab(id2);
@@ -3734,6 +3735,27 @@ var IZVOD_POTPISI = (function(){ try { return JSON.parse(localStorage.getItem('p
 function pnPotpisIzvoda(r){
   return String(r.datum||'')+'|'+Math.abs(parseFloat(r.iznos)||0).toFixed(2)+'|'+
          String(r.opis||'').toLowerCase().replace(/\s+/g,' ').trim().slice(0,60);
+}
+// Kad se obriše redak koji je došao s izvoda, mora nestati i njegov potpis,
+// inače bi ga pnObnovaIzIzvoda pri sljedećem pokretanju vratila natrag.
+function pnZaboraviPotpis(r){
+  if (!r) return;
+  var izn=Math.abs(parseFloat(r.iznos)||0); if (!(izn>0)) return;
+  var dd=String(r.datum||'').split('.');
+  if (dd.length<2) return;
+  var dan=dd[0].replace(/^0/,''), mj=dd[1].replace(/^0/,'');
+  var promjena=false;
+  for (var i=IZVOD_POTPISI.length-1;i>=0;i--) {
+    var d=String(IZVOD_POTPISI[i]||'').split('|'); if (d.length<2) continue;
+    var pd=String(d[0]).split('.'); if (pd.length<2) continue;
+    if (pd[0].replace(/^0/,'')!==dan || pd[1].replace(/^0/,'')!==mj) continue;
+    if (Math.abs((parseFloat(d[1])||0)-izn)>0.01) continue;
+    IZVOD_POTPISI.splice(i,1); promjena=true;
+  }
+  if (promjena) {
+    try { localStorage.setItem('pn_izvod_potpisi', JSON.stringify(IZVOD_POTPISI)); } catch(e){}
+    if (typeof pnSyncOznaci==='function') pnSyncOznaci('pn_izvod_potpisi');
+  }
 }
 function pnZapamtiPotpis(p){
   if (IZVOD_POTPISI.indexOf(p)>=0) return;
@@ -7437,6 +7459,7 @@ function sbZauzet(){
   return false;
 }
 // Povuci ako je proslo dovoljno vremena od zadnjeg puta
+function sbPoslijePovlacenja(){ try { if (typeof pnJednokratniIspravci==='function') pnJednokratniIspravci(); } catch(e){} }
 function sbOsvjeziAko(razmakMs){
   if (!sbUkljucen()) return;
   if (document.hidden) return;
@@ -7444,6 +7467,7 @@ function sbOsvjeziAko(razmakMs){
   SB_ZADNJE_POVL=Date.now();
   try {
     sbPovuci(true).then(function(){
+      sbPoslijePovlacenja();
       // posalji i sve sto je ostalo nezavrseno (npr. promjene nastale bez veze)
       var ima=false; for (var k in SB_CEKA) { ima=true; break; }
       if (ima) sbPosalji(true);
@@ -7534,8 +7558,10 @@ function pnIspravakRubrika(){
 // Ako takvog iznosa nema nigdje u podacima — ni kao stavka ni kao rata —
 // redak se vraća u rubriku koju određuju pravila knjiženja.
 function pnObnovaIzIzvoda(){
-  var FLAG='pn_obnova_izvod_1';
-  try { if (localStorage.getItem(FLAG)) return; } catch(e){}
+  // BEZ zastavice: provjerava se pri SVAKOM pokretanju. Ako se redak izgubi
+  // (sukob dvaju uređaja pri sinkronizaciji), prvi uređaj koji to primijeti vrati ga.
+  // Dvostruko knjiženje nije moguće jer pnVecEvidentirano provjerava i stavke i rate,
+  // a obrisani redak više nema potpis (pnZaboraviPotpis).
   var vraceno=0, sad=new Date();
   for (var i=0;i<IZVOD_POTPISI.length;i++) {
     var d=String(IZVOD_POTPISI[i]||'').split('|'); if (d.length<2) continue;
@@ -7551,7 +7577,10 @@ function pnObnovaIzIzvoda(){
     if (!TD[kat]) kat='razno';
     if (!TD[kat][mj]) TD[kat][mj]=[];
     var dm=String(dan<10?'0'+dan:dan)+'.'+String((mj+1)<10?'0'+(mj+1):(mj+1))+'.';
-    TD[kat][mj].push({datum:dm, iznos:iznos, tvrtka:(opis?opis.toUpperCase():'(iz izvoda)'), vpl:'', placeno:dm, izvod:1});
+    // uplate[] mora postojati — po njemu pnVecEvidentirano prepoznaje da je stavka već tu,
+    // pa se pri sljedećoj provjeri ne stvori dvostruki redak
+    TD[kat][mj].push({datum:dm, iznos:iznos, tvrtka:(opis?opis.toUpperCase():'(iz izvoda)'), vpl:'', placeno:dm, izvod:1,
+      uplate:[{d:dm, i:iznos, izv:1, ref:'obnovljeno iz izvoda'}]});
     syncTDtoP(kat); vraceno++;
   }
   if (vraceno) {
@@ -7562,7 +7591,7 @@ function pnObnovaIzIzvoda(){
     } catch(e){}
     if (typeof pnSyncOznaci==='function') { pnSyncOznaci('pn_td'); pnSyncOznaci('pn_p'); pnSyncOznaci('pn_p_full'); }
   }
-  try { localStorage.setItem(FLAG,'1'); } catch(e){}
+  return vraceno;
 }
 
 // VAŽNO: jednokratni ispravci smiju se pokrenuti tek NAKON povlačenja iz oblaka.
@@ -7571,12 +7600,17 @@ function pnObnovaIzIzvoda(){
 // Upravo tako je nestala uplata PDV-a od 353,60 nakon v147.
 var PN_ISPRAVCI_GOTOVO=false;
 function pnJednokratniIspravci(){
-  if (PN_ISPRAVCI_GOTOVO) return;
-  PN_ISPRAVCI_GOTOVO=true;
-  try { pnIspravakPravila(); } catch(e){}
-  try { pnIspravakRubrika(); } catch(e){}
-  try { pnObnovaIzIzvoda(); } catch(e){}
-  try { if (typeof activeTab!=='undefined' && activeTab && typeof switchTab==='function') switchTab(activeTab); } catch(e){}
+  var osvjezi=false;
+  if (!PN_ISPRAVCI_GOTOVO) {
+    PN_ISPRAVCI_GOTOVO=true;
+    try { pnIspravakPravila(); } catch(e){}
+    try { pnIspravakRubrika(); } catch(e){}
+    osvjezi=true;
+  }
+  // Obnova se provjerava i poslije svakog povlačenja — tako se gubitak retka
+  // nastao sukobom dvaju uređaja sam popravi, bez ijednog klika.
+  try { if (pnObnovaIzIzvoda()) osvjezi=true; } catch(e){}
+  if (osvjezi) { try { if (typeof activeTab!=='undefined' && activeTab && typeof switchTab==='function') switchTab(activeTab); } catch(e){} }
 }
 
 // Pri pokretanju: ako je uredjaj prijavljen, povuci sto je novije u oblaku
