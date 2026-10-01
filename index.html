@@ -1041,6 +1041,12 @@ body.mob .tab-pane .sec-title:first-child{font-size:30px!important}
 .sb-chip.err .sb-dot{background:#ff3b30}
 .sb-chip.err{color:var(--red)}
 body.mob .sb-chip{display:none!important}
+#sbChipMob .sb-dot{width:8px;height:8px}
+#sbChipMob.ok .sb-dot{background:#34c759}
+#sbChipMob.rad .sb-dot{background:#ff9500}
+#sbChipMob.err .sb-dot{background:#ff3b30}
+#sbChipMob.err{color:#ff3b30}
+#sbChipMob{gap:5px;font-size:11px;font-weight:600;letter-spacing:-.01em}
 .hd-cap{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--label3);margin:2px 0 9px}
 .hd-status{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:20px}
 @media (max-width:1500px){ .hd-status{grid-template-columns:repeat(2,minmax(0,1fr))} }
@@ -1197,7 +1203,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v150</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v153</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1329,7 +1335,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v150';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v153';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -1516,6 +1522,97 @@ var TD = (function() {
 })();
 var TS = {};
 // Rubrike se otvaraju na teku\u0107em mjesecu \u2014 tamo se i unosi.
+// ═══════════════════════════════════════════
+// SPAJANJE TRANSAKCIJA (pn_td)
+// Sve transakcije žive u jednom paketu. Dok se pri sinkronizaciji birala
+// jedna cijela kopija, uređaj koji nije vidio tuđi novi redak slao bi svoju
+// stariju kopiju preko njega i redak bi nestao. Sada se spaja redak po redak.
+// Redak se prepoznaje po datumu, iznosu i opisu; kod istog retka ostaje
+// lokalna inačica (može imati noviji datum plaćanja, rate, PDV oznake).
+// ═══════════════════════════════════════════
+function tdPrazanRedak(r){
+  return !(parseFloat(r&&r.iznos)>0) && !String((r&&r.tvrtka)||'').trim();
+}
+function tdKljucRetka(r){
+  return String((r&&r.datum)||'').trim()+'|'+
+         (Math.round((parseFloat(r&&r.iznos)||0)*100)/100).toFixed(2)+'|'+
+         String((r&&r.tvrtka)||'').replace(/\s+/g,' ').trim().toLowerCase();
+}
+// Obrisani retci se pamte 90 dana, inace bi ih spajanje vratilo s drugog uređaja.
+var TD_OBRISANO = (function(){ try { return JSON.parse(localStorage.getItem('pn_td_obrisano')||'[]'); } catch(e){ return []; } })();
+function tdZapamtiBrisanje(r){
+  if (!r || tdPrazanRedak(r)) return;
+  var k=r.id||tdKljucRetka(r), sad=Date.now();
+  TD_OBRISANO=TD_OBRISANO.filter(function(x){ return x && x.k!==k && (sad-(x.t||0))<7776000000; });
+  TD_OBRISANO.push({k:k, t:sad});
+  if (TD_OBRISANO.length>500) TD_OBRISANO=TD_OBRISANO.slice(-400);
+  try { localStorage.setItem('pn_td_obrisano', JSON.stringify(TD_OBRISANO)); } catch(e){}
+  if (typeof pnSyncOznaci==='function') pnSyncOznaci('pn_td_obrisano');
+}
+function tdJeObrisan(k){
+  var sad=Date.now();
+  for (var i=0;i<TD_OBRISANO.length;i++) {
+    var x=TD_OBRISANO[i];
+    if (x && x.k===k && (sad-(x.t||0))<7776000000) return true;
+  }
+  return false;
+}
+// Stabilna oznaka retka. Izvodi se iz sadržaja pa je na oba uređaja ista,
+// a jednom dodijeljena više se ne mijenja — zato ispravak iznosa ili opisa
+// ostaje isti redak, a ne postaje drugi.
+function tdHash(t){
+  var h=5381; t=String(t||'');
+  for (var i=0;i<t.length;i++) h=((h*33) ^ t.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+function tdOsiguraj(td){
+  if (!td) return false;
+  var promjena=false;
+  for (var k in td) {
+    if (!Object.prototype.hasOwnProperty.call(td,k) || !td[k]) continue;
+    for (var m=0;m<12;m++) {
+      var rows=td[k][m]||[], brojac={};
+      for (var i=0;i<rows.length;i++) {
+        var r=rows[i];
+        if (tdPrazanRedak(r)) continue;
+        var osn='t'+tdHash(k+'|'+m+'|'+tdKljucRetka(r));
+        brojac[osn]=(brojac[osn]||0)+1;
+        var id=(brojac[osn]>1) ? (osn+'_'+brojac[osn]) : osn;
+        if (!r.id) { r.id=id; promjena=true; }
+      }
+    }
+  }
+  return promjena;
+}
+function tdSpoji(lok, obl){
+  try { tdOsiguraj(lok); tdOsiguraj(obl); } catch(e){}
+  var out={}, k;
+  for (k in lok) if (Object.prototype.hasOwnProperty.call(lok,k)) out[k]=1;
+  for (k in obl) if (Object.prototype.hasOwnProperty.call(obl,k)) out[k]=1;
+  var rez={};
+  for (k in out) {
+    var L=(lok&&lok[k])||[], O=(obl&&obl[k])||[], mjeseci=[];
+    for (var m=0;m<12;m++) {
+      var vidjeni={}, spoj=[];
+      ((L[m])||[]).forEach(function(r){
+        if (tdPrazanRedak(r)) return;
+        var id=r.id||('s'+tdKljucRetka(r));
+        if (vidjeni[id]) return;
+        vidjeni[id]=1; spoj.push(r);
+      });
+      ((O[m])||[]).forEach(function(r){
+        if (tdPrazanRedak(r)) return;
+        var id=r.id||('s'+tdKljucRetka(r));
+        if (vidjeni[id] || tdJeObrisan(id) || tdJeObrisan(tdKljucRetka(r))) return;
+        vidjeni[id]=1; spoj.push(r);
+      });
+      mjeseci.push(spoj.length?spoj:[{datum:'',iznos:0,tvrtka:'',vpl:'',placeno:''}]);
+    }
+    rez[k]=mjeseci;
+  }
+  return rez;
+}
+
 var PN_MJ_SAD = (function(){ var m=new Date().getMonth(); return (m>=0&&m<12)?m:0; })();
 for (var _i=0; _i<TD_TABS.length; _i++) TS[TD_TABS[_i]] = PN_MJ_SAD;
 
@@ -2288,6 +2385,7 @@ function renderTrans(id) {
       btn.addEventListener('click', function() {
         var id2=this.dataset.id, ri=parseInt(this.dataset.r,10), mo=TS[id2];
         try { pnZaboraviPotpis(TD[id2][mo][ri]); } catch(e){}
+        try { tdZapamtiBrisanje(TD[id2][mo][ri]); } catch(e){}
         TD[id2][mo].splice(ri,1);
         if (!TD[id2][mo].length) TD[id2][mo].push({datum:'',iznos:0,tvrtka:'',vpl:'',placeno:''});
         syncTDtoP(id2); saveAll(); rerenderTransTab(id2);
@@ -6945,7 +7043,7 @@ function potvrdiIzlazneRacune() {
 // ── KOMPLETAN JSON BACKUP (izvoz/uvoz svih podataka aplikacije) ──
 var PN_BACKUP_KEYS = ['pn_p_full','pn_td','pn_rows','pn_custom_map','pn_settings','pn_logo','pn_pdv',
   'pn_daily_artikli','pn_daily_artikli_ap','pn_aparati','pn_aparat_akt',
-  'pn_djel_sati','pn_zaposlenici','pn_zaposlenici_info','pn_rules','pn_izvod_potpisi','pn_cf_bal_'];
+  'pn_djel_sati','pn_zaposlenici','pn_zaposlenici_info','pn_rules','pn_izvod_potpisi','pn_td_obrisano','pn_cf_bal_'];
 
 
 // ═══════════════════════════════════════════
@@ -7022,33 +7120,47 @@ function sbStatus(txt, vrsta){
   sbChipOsvjezi();
 }
 // Mali pokazatelj u zaglavlju — da se odmah vidi radi li sinkronizacija
-function sbChipOsvjezi(){
-  var chip=document.getElementById('sbChip'), txt=document.getElementById('sbStatusMini');
-  if (!chip||!txt) return;
-  // Nije ni postavljeno — nema se sto pokazivati
-  if (!SB.url || !SB.kljuc) { chip.style.display='none'; return; }
-  // Postavljeno, ali bez prijave: to se MORA vidjeti
+// Stanje sinkronizacije računa se jednom, a prikazuje se na OBJE oznake —
+// u zaglavlju na računalu i u gornjoj traci na mobitelu. Bez mobilne oznake
+// korisnik na telefonu nema nikakav znak da sinkronizacija ne radi.
+function sbStanjeOznake(){
+  if (!SB.url || !SB.kljuc) return null;
   if (!sbUkljucen()) {
-    chip.style.display='inline-flex'; chip.className='sb-chip err';
-    txt.textContent = SB_ISTEKLA ? 'Prijava istekla' : 'Niste prijavljeni';
-    chip.title='Promjene se ne šalju u oblak. Kliknite za prijavu.';
-    return;
+    return {k:'err', t:(SB_ISTEKLA ? 'Prijava istekla' : 'Niste prijavljeni'), tm:(SB_ISTEKLA ? 'Istekla' : 'Prijava'),
+            n:'Promjene se ne šalju u oblak. Kliknite za prijavu.'};
   }
-  chip.style.display='inline-flex';
-  chip.className='sb-chip';
   if (SB_VRSTA==='err') {
-    chip.classList.add('err');
-    txt.textContent = /istekla/i.test(SB_ZADNJI) ? 'Prijava istekla' :
-                      (/veze|mrež/i.test(SB_ZADNJI) ? 'Nema veze' : 'Sinkronizacija ne radi');
-    chip.title = SB_ZADNJI;
-    return;
+    var p = /istekla/i.test(SB_ZADNJI) ? 'Prijava istekla' :
+            (/veze|mrež/i.test(SB_ZADNJI) ? 'Nema veze' : 'Sinkronizacija ne radi');
+    return {k:'err', t:p, tm:(/veze|mrež/i.test(SB_ZADNJI) ? 'Nema veze' : 'Greška'), n:SB_ZADNJI};
   }
-  if (/Povla\u010dim|\u0160aljem|Prijava/.test(SB_ZADNJI)) { chip.classList.add('rad'); txt.textContent='Sinkroniziram\u2026'; return; }
+  if (/Povlačim|Šaljem|Prijava/.test(SB_ZADNJI)) return {k:'rad', t:'Sinkroniziram…', tm:'…', n:SB_ZADNJI};
   if (SB_ZADNJA_OK) {
-    chip.classList.add('ok');
-    var t=new Date(SB_ZADNJA_OK);
-    txt.textContent='Usklađeno '+('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2);
-  } else txt.textContent='Spremno';
+    var d=new Date(SB_ZADNJA_OK), hm=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+    return {k:'ok', t:'Usklađeno '+hm, tm:hm, n:'Zadnje uspješno usklađivanje u '+hm};
+  }
+  return {k:'', t:'Spremno', tm:'—', n:'Spremno'};
+}
+function sbChipOsvjezi(){
+  var st=sbStanjeOznake();
+  var chip=document.getElementById('sbChip'), txt=document.getElementById('sbStatusMini');
+  if (chip && txt) {
+    if (!st) chip.style.display='none';
+    else {
+      chip.style.display='inline-flex';
+      chip.className='sb-chip'+(st.k?' '+st.k:'');
+      txt.textContent=st.t; chip.title=st.n;
+    }
+  }
+  var cm=document.getElementById('sbChipMob'), tm=document.getElementById('sbStatusMob');
+  if (cm && tm) {
+    if (!st) cm.style.display='none';
+    else {
+      cm.style.display='inline-flex';
+      cm.className='mob-chip'+(st.k?' '+st.k:'');
+      tm.textContent=st.tm; cm.title=st.n;
+    }
+  }
 }
 function sbChipKlik(){
   if (!sbUkljucen()) { if (typeof switchTab==='function') switchTab('postavke'); return; }
@@ -7211,6 +7323,9 @@ function sbPovuci(tiho){
   // Treba li ovaj podatak uopce preuzeti?
   var trebaMi=function(kljuc, azurirano){
     if (!pnSyncKljuc(kljuc)) return false;
+    // Transakcije: i kad ovaj uređaj ima nespremljenu promjenu, tuđu kopiju
+    // treba dovući — ne da je prepiše, nego da se spoji redak po redak.
+    if (kljuc==='pn_td' && SB_CEKA[kljuc]) return SB_LOK[kljuc]!==azurirano;
     var lok=SB_LOK[kljuc]||'';
     if (SB_PRAZNO || !PN_KLJ_POC[kljuc]) lok='';
     if (!SB_CEKA[kljuc]) lok='';
@@ -7252,6 +7367,27 @@ function sbPovuci(tiho){
       // mjerodavan. Bez ovoga bi razlika u satu dvaju uredaja trajno blokirala
       // preuzimanje (uredaj s naprijed pomaknutim satom odbijao bi tude novije zapise).
       if (!SB_CEKA[x.kljuc]) lok='';
+      // Transakcije: ako oba uređaja imaju promjenu, retci se spajaju.
+      // Ranije je jedna cijela kopija pobjeđivala i tuđi retci su nestajali.
+      if (x.kljuc==='pn_td' && SB_CEKA[x.kljuc]) {
+        try {
+          var _ob=JSON.parse(x.vrijednost||'{}');
+          var _spoj=tdSpoji(TD, _ob);
+          var _novi=JSON.stringify(_spoj);
+          if (JSON.stringify(TD)!==_novi) {
+            for (var _dk in TD) { if (Object.prototype.hasOwnProperty.call(TD,_dk)) delete TD[_dk]; }
+            for (var _nk in _spoj) { if (Object.prototype.hasOwnProperty.call(_spoj,_nk)) TD[_nk]=_spoj[_nk]; }
+            localStorage.setItem('pn_td', _novi);
+            for (var _sk in TD) { if (TAB_TO_P[_sk]) syncTDtoP(_sk); }
+            localStorage.setItem('pn_p', JSON.stringify(P));
+            localStorage.setItem('pn_p_full', JSON.stringify(P));
+            promjena++;
+          }
+          // ostaje u redu čekanja da spojeni rezultat ode i u oblak
+          SB_LOK[x.kljuc]=new Date().toISOString();
+        } catch(e3){}
+        return;
+      }
       // Inace: noviji zapis pobjeđuje; kod jednakog vremena ostaje lokalni
       if (lok && new Date(lok)>=new Date(x.azurirano)) return;
       try {
@@ -7284,6 +7420,7 @@ var SB_NAZIVI={
   'pn_p':'Iznosi po rubrikama (kopija)',
   'pn_rows':'Popis rubrika',
   'pn_custom_map':'Vlastite rubrike',
+  'pn_td_obrisano':'Popis obrisanih stavaka',
   'pn_pdv':'Postavke PDV obra\u010duna',
   'pn_settings':'Postavke tvrtke',
   'pn_logo':'Logo',
@@ -7621,7 +7758,13 @@ function pnJednokratniIspravci(){
   var osvjezi=false;
   if (!PN_ISPRAVCI_GOTOVO) {
     PN_ISPRAVCI_GOTOVO=true;
-    try { pnIspravakPravila(); } catch(e){}
+    try {
+    if (tdOsiguraj(TD)) {
+      localStorage.setItem('pn_td', JSON.stringify(TD));
+      if (typeof pnSyncOznaci==='function') pnSyncOznaci('pn_td');
+    }
+  } catch(e){}
+  try { pnIspravakPravila(); } catch(e){}
     try { pnIspravakRubrika(); } catch(e){}
     osvjezi=true;
   }
@@ -8667,7 +8810,9 @@ function mobTopBar(){
     '<div class="mob-right"><button class="mob-chip ap" onclick="apSheet()" aria-label="Aparat"><span class="ap-dot'+(AP_AKT?'':' svi')+'"></span><span id="apChipMob">'+(apAktivni()?apAktivni().oznaka:'SVI')+'</span></button>'+
     '<button class="mob-chip ico" onclick="izvoziSheet()" aria-label="Izvoz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/></svg></button>'+
     '<span class="mob-god"><button class="mob-god-y" onclick="mobRazdobljeSheet()">'+mobRazdobljeLabel()+'</button><button class="mob-god-p" onclick="mobDodajGodinu()" aria-label="Dodaj godinu">+</button></span>'+
+    '<button class="mob-chip" id="sbChipMob" onclick="sbChipKlik()" aria-label="Sinkronizacija" style="display:none"><span class="sb-dot"></span><span id="sbStatusMob"></span></button>'+
     '<button class="mob-chip ico" onclick="toggleTheme()" aria-label="Tema">'+mobSvg('sun',15,2.2)+'</button></div>';
+  try { sbChipOsvjezi(); } catch(e){}
 }
 function mobSakrijUvoz(){ try{localStorage.setItem('pn_backup_uvezen','1');}catch(e){} renderMobHome(); }
 function mobDodajGodinu(){ pnAlert('Za sada je dostupna samo 2026. godina.\n\nVi\u0161egodi\u0161nji prikaz dodajemo kasnije.'); }
