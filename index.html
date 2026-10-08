@@ -1203,7 +1203,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v154</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v156</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1335,7 +1335,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v154';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v156';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -4470,35 +4470,6 @@ function getISOWeek(date) {
 // ═══════════════════════════════════════════
 var PDF_ROWS = [];
 
-function handlePdfUpload(inp) {
-  var file=inp.files[0]; if(!file) return;
-  var status=document.getElementById('pdfStatus');
-  status.textContent='Učitavanje...';
-  var reader=new FileReader();
-  reader.onload=function(e){
-    var typedarray=new Uint8Array(e.target.result);
-    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    pdfjsLib.getDocument(typedarray).promise.then(function(pdf){
-      var pagePromises=[];
-      for (var p=1;p<=pdf.numPages;p++) {
-        pagePromises.push(pdf.getPage(p).then(function(page){
-          return page.getTextContent().then(function(tc){
-            return pdfItemsToLines(tc.items);
-          });
-        }));
-      }
-      Promise.all(pagePromises).then(function(pages){
-        var allText = pages.join('\n');
-        parsePdfIzvod(allText);
-        status.textContent='✓ Učitano '+pdf.numPages+' str.';
-      });
-    }).catch(function(err){
-      status.textContent='⚠ Greška: '+err.message;
-    });
-  };
-  reader.readAsArrayBuffer(file);
-}
-
 // Grupira PDF.js text iteme u prave retke prema Y-poziciji (umjesto spajanja svega u jedan dugacki red)
 function pdfItemsToLines(items) {
   var words = items.map(function(it){
@@ -4577,8 +4548,96 @@ function izvuciSaldoInfo(text) {
   return info;
 }
 
-function parsePdfIzvod(text) {
-  PDF_SALDO_INFO = izvuciSaldoInfo(text);
+// ═══════════════════════════════════════════
+// OBLICI IZVODA
+// Erste daje isti izvod u tri oblika: PDF, HTML i .wri (strojni zapis).
+// HTML i .wri imaju podatke već razdvojene po poljima, pa su točniji od PDF-a
+// u kojem se stupci moraju pogađati po razmacima. Sva tri oblika završavaju
+// u istoj funkciji izvodRedak(), pa su knjiženje, uparivanje i pravila isti.
+// ═══════════════════════════════════════════
+
+// Hrvatska množina: 1 redak, 2 retka, 5 redaka (11–14 idu uz "redaka").
+function izvMn(n, jedan, dva, puno){
+  var z=Math.abs(n)%100, j=z%10;
+  if (z>=11 && z<=14) return puno;
+  if (j===1) return jedan;
+  if (j>=2 && j<=4) return dva;
+  return puno;
+}
+// Broj u hrvatskom zapisu, s predznakom (fmt2 vraća apsolutnu vrijednost).
+function izvFmt(n){
+  return (n||0).toLocaleString('hr-HR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+// Početak novog uvoza. dodaj=true znači da se učitava još jedna datoteka
+// u isti pregled (više dnevnih izvadaka odjednom).
+// Viđeni retci se pamte za cijeli uvoz, ne samo za jednu datoteku. Banka isti
+// izvod šalje u tri oblika (PDF, HTML, .wri); ako se povuku zajedno, ista bi se
+// transakcija pojavila triput. Isti datum, iznos i opis = isti nalog.
+var IZVOD_VIDJENI={}, IZVOD_DVOSTRUKI=0, IZVOD_SALDA=[];
+function izvodOtisak(i){
+  return [i&&i.pocetno, i&&i.zavrsno, i&&i.dugovni, i&&i.potrazni].join('|');
+}
+function izvodPocni(dodaj){
+  if (!dodaj) { PDF_ROWS=[]; PDF_SALDO_INFO=null; IZVOD_VIDJENI={}; IZVOD_DVOSTRUKI=0; IZVOD_SALDA=[]; }
+}
+// Spaja rekapitulacije više izvadaka: početno stanje od prvog, konačno od
+// zadnjeg, a brojevi naloga i promet se zbrajaju.
+function izvodDodajSaldo(novi){
+  if (!novi) return;
+  if (!PDF_SALDO_INFO) { PDF_SALDO_INFO=novi; IZVOD_SALDA=[izvodOtisak(novi)]; return; }
+  // Isti izvod u drugom obliku nosi istu rekapitulaciju — ne smije se zbrojiti.
+  var ot=izvodOtisak(novi);
+  if (IZVOD_SALDA.indexOf(ot)>=0) return;
+  IZVOD_SALDA.push(ot);
+  var A=PDF_SALDO_INFO;
+  if (!A.pocetno && novi.pocetno) A.pocetno=novi.pocetno;
+  if (novi.zavrsno) A.zavrsno=novi.zavrsno;
+  ['nalogaTeret','nalogaKorist'].forEach(function(k){
+    if (novi[k]==null) return;
+    A[k] = (A[k]==null) ? novi[k] : (A[k]+novi[k]);
+  });
+  ['dugovni','potrazni','naknada'].forEach(function(k){
+    if (novi[k]==null) return;
+    if (A[k]==null) { A[k]=novi[k]; return; }
+    var x=pdfBroj(A[k]), y=pdfBroj(novi[k]);
+    if (x!=null && y!=null) A[k]=izvFmt(x+y);
+  });
+}
+// Od datuma, iznosa i opisa napravi redak pregleda — s pravilima, uparivanjem
+// s postojećim računima i provjerom je li već proknjižen.
+function izvodRedak(datum, iznos, opis){
+  var amtAbs=Math.abs(parseFloat(iznos)||0);
+  if (!(amtAbs>0)) return null;
+  opis=String(opis||'').replace(/\s+/g,' ').trim();
+  if (opis.length>70) opis=opis.slice(0,70);
+  var kljuc=datum+'|'+amtAbs+'|'+opis.slice(0,20);
+  if (IZVOD_VIDJENI[kljuc]) { IZVOD_DVOSTRUKI++; return null; }
+  IZVOD_VIDJENI[kljuc]=true;
+
+  var naucenaKat=pravioZaPartnera(opis);
+  var kat=naucenaKat||(iznos<0?'razno':'prihodi26');
+  var kandidati=pnKandidati(amtAbs, opis);
+  var podudaranje=(kandidati.length && kandidati[0].score>=75) ? kandidati[0] : null;
+  var _p={datum:datum, opis:opis||'(bez opisa)', iznos:iznos};
+  var _evid=pnVecEvidentirano(datum, amtAbs);
+  var vecKnjizeno=(IZVOD_POTPISI.indexOf(pnPotpisIzvoda(_p))>=0) || !!_evid;
+  var _evidOpis=_evid ? ('već evidentirano kao rata: '+String(_evid.r.tvrtka||'').slice(0,46)) : '';
+  var _mo=parseInt(String(datum).split('.')[1],10)-1;
+  if (isNaN(_mo)||_mo<0||_mo>11) _mo=new Date().getMonth();
+  return {
+    datum:datum, opis:opis||'(bez opisa)', iznos:iznos, kat:kat, naucenaKat:!!naucenaKat,
+    kandidati:kandidati, vecKnjizeno:vecKnjizeno, mjesec:_mo,
+    akcija: vecKnjizeno ? 'preskoci' : (podudaranje ? 'upari' : 'nova'),
+    cilj: podudaranje ? {kat:podudaranje.kat, mo:podudaranje.mo, ri:podudaranje.ri} : null,
+    podudaranjeRazlog: podudaranje ? podudaranje.razlog : '',
+    vecRazlog: _evidOpis,
+    ukljuci:true, dupliciran:false, podudaranje:podudaranje
+  };
+}
+
+function parsePdfIzvod(text, dodaj) {
+  izvodPocni(dodaj);
+  izvodDodajSaldo(izvuciSaldoInfo(text));
 
   var lines = text.split(/\n/);
   var dateRe = /(\d{2}\.\d{2}\.\d{4})\.?/;
@@ -4586,8 +4645,7 @@ function parsePdfIzvod(text) {
   // Retci koji spominju stanje racuna (pocetno/konacno/prethodno/privremeno/raspolozivo) NISU transakcije - iskljuci ih
   var stanjeRe = /po\u010detno stanje|kona\u010dno stanje|prethodno stanje|privremeno stanje|raspolo\u017eivo stanje|stanje na dan|s\s*t\s*a\s*n\s*j\s*e|rekapitulacija/i;
 
-  PDF_ROWS = [];
-  var vidjeniRedci = {}; // sprijeci duplo hvatanje istog retka (npr. Datum valute + Datum obrade su isti redak, prikazuju se dvaput ako format ima ponovljene datume)
+  // duplo hvatanje istog retka sprječava IZVOD_VIDJENI u izvodRedak() (npr. Datum valute + Datum obrade su isti redak, prikazuju se dvaput ako format ima ponovljene datume)
 
   for (var i=0;i<lines.length;i++) {
     var ln=lines[i].trim(); if(!ln) continue;
@@ -4622,38 +4680,224 @@ function parsePdfIzvod(text) {
     if (/^HR\d{2}\s|^\d{4}-\d|^HR\d{2}\s*\d/.test(opis) && opis.replace(/[\d\sHRhr\-]/g,'').length<3) continue;
     if (opis.length>70) opis=opis.slice(0,70);
 
-    var kljuc = dM[1]+'|'+amtAbs+'|'+opis.slice(0,20);
-    if (vidjeniRedci[kljuc]) continue;
-    vidjeniRedci[kljuc]=true;
+    // Smjer (prihod/rashod): ako izvod ima SAMO isplate (naloga u korist=0) ili SAMO
+    // uplate (naloga na teret=0), sve stavke sigurno idu u taj smjer. Inače je zadano
+    // rashod, uz mogućnost ručne izmjene na pregledu. U HTML-u i .wri zapisu smjer se
+    // ne pogađa — ondje su isplata i uplata zasebni stupci.
+    var predznak = -1;
+    var _I = PDF_SALDO_INFO||{};
+    if (_I.nalogaTeret===0 && _I.nalogaKorist>0) predznak = 1;
+    else if (_I.nalogaKorist===0 && _I.nalogaTeret>0) predznak = -1;
 
-    // Odredi smjer (prihod/rashod): ako izvod ima SAMO isplate (naloga u korist=0) ili SAMO uplate (naloga na teret=0),
-    // sve prepoznate stavke sigurno idu u taj smjer. Inace (miješano), zadano je rashod uz mogucnost rucne izmjene.
-    var predznak = -1; // zadano: rashod
-    if (PDF_SALDO_INFO.nalogaTeret===0 && PDF_SALDO_INFO.nalogaKorist>0) predznak = 1;
-    else if (PDF_SALDO_INFO.nalogaKorist===0 && PDF_SALDO_INFO.nalogaTeret>0) predznak = -1;
-    var amt = amtAbs * predznak;
-
-    var naucenaKat = pravioZaPartnera(opis);
-    var kat = naucenaKat || (amt<0 ? 'razno' : 'prihodi26');
-    var kandidati = pnKandidati(amtAbs, opis);
-    var podudaranje = (kandidati.length && kandidati[0].score>=75) ? kandidati[0] : null;
-    var _p={datum:dM[1], opis:opis||'(bez opisa)', iznos:amt};
-    var _evid = pnVecEvidentirano(dM[1], amtAbs);
-    var vecKnjizeno = (IZVOD_POTPISI.indexOf(pnPotpisIzvoda(_p))>=0) || !!_evid;
-    var _evidOpis = _evid ? ('već evidentirano kao rata: '+String(_evid.r.tvrtka||'').slice(0,46)) : '';
-    var _mo=parseInt(String(dM[1]).split('.')[1],10)-1; if (isNaN(_mo)||_mo<0||_mo>11) _mo=new Date().getMonth();
-    PDF_ROWS.push({
-      datum:dM[1], opis:opis||'(bez opisa)', iznos:amt, kat:kat, naucenaKat:!!naucenaKat,
-      kandidati:kandidati, vecKnjizeno:vecKnjizeno, mjesec:(podudaranje?_mo:_mo),
-      akcija: vecKnjizeno ? 'preskoci' : (podudaranje ? 'upari' : 'nova'),
-      cilj: podudaranje ? {kat:podudaranje.kat, mo:podudaranje.mo, ri:podudaranje.ri} : null,
-      podudaranjeRazlog: podudaranje ? podudaranje.razlog : '',
-      vecRazlog: _evidOpis,
-      ukljuci:true, dupliciran:false, podudaranje:podudaranje
-    });
+    var rr = izvodRedak(dM[1], amtAbs*predznak, opis);
+    if (rr) PDF_ROWS.push(rr);
   }
   renderPdfPreview();
 }
+
+// ── HTML izvod ─────────────────────────────────────────────────────
+// Najpouzdaniji oblik: banka već daje stupce. Redak transakcije je
+// <tr class="trItems"> sa šest ćelija — datumi, platitelj/IBAN,
+// redni broj i opis plaćanja, pozivi na broj, ISPLATA, UPLATA.
+// Zato se smjer ne pogađa nego se čita iz toga koji je stupac popunjen.
+function izvodHtmlRedci(html){
+  return String(html||'')
+    .replace(/<br\s*\/?>/gi,'\n')
+    .replace(/<[^>]*>/g,'')
+    .replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/&lt;/gi,'<')
+    .replace(/&gt;/gi,'>').replace(/&quot;/gi,'"').replace(/&#39;/g,"'")
+    .replace(/\u00a0/g,' ')
+    .split('\n').map(function(x){ return x.replace(/\s+/g,' ').trim(); })
+    .filter(function(x){ return x; });
+}
+// Cijeli dokument kao tekst, jedan red tablice = jedan redak teksta,
+// da rekapitulacija ("Dugovni promet" i iznos su zasebne ćelije) ostane spojena.
+function izvodHtmlTekst(html){
+  return String(html||'')
+    .replace(/<br\s*\/?>/gi,' ')
+    .replace(/<\/(tr|table|div|p|h\d)>/gi,'\n')
+    .replace(/<[^>]*>/g,' ')
+    .replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&')
+    .replace(/\u00a0/g,' ')
+    .split('\n').map(function(x){ return x.replace(/[ \t]+/g,' ').trim(); })
+    .join('\n');
+}
+function parseHtmlIzvod(html, dodaj){
+  izvodPocni(dodaj);
+  izvodDodajSaldo(izvuciSaldoInfo(izvodHtmlTekst(html)));
+
+  var doc=null;
+  try { doc=new DOMParser().parseFromString(String(html),'text/html'); } catch(e){ doc=null; }
+  var redovi = doc ? doc.querySelectorAll('tr.trItems') : [];
+  if (!redovi.length) { // nije Erste HTML izvod — pokušaj kao običan tekst
+    var t=izvodHtmlTekst(html);
+    PDF_ROWS=[]; parsePdfIzvod(t, true); return;
+  }
+  for (var i=0;i<redovi.length;i++) {
+    var td=redovi[i].querySelectorAll('td');
+    if (td.length<6) continue;
+    var dat=izvodHtmlRedci(td[0].innerHTML);
+    var par=izvodHtmlRedci(td[1].innerHTML);
+    var svr=izvodHtmlRedci(td[2].innerHTML);
+    var isp=izvodHtmlRedci(td[4].innerHTML).join(' ');
+    var upl=izvodHtmlRedci(td[5].innerHTML).join(' ');
+
+    var dM=(dat.join(' ')).match(/(\d{2}\.\d{2}\.\d{4})/);
+    if (!dM) continue;
+    var iznIsp=pdfBroj((isp.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/)||[])[0]);
+    var iznUpl=pdfBroj((upl.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/)||[])[0]);
+    var iznos = (iznUpl && iznUpl!==0) ? Math.abs(iznUpl) : -Math.abs(iznIsp||0);
+    if (!iznos) continue;
+
+    // naziv partnera je prvi redak ćelije (drugi je njegov IBAN),
+    // svrha plaćanja je prvi redak treće ćelije bez rednog broja ("1 - Plaćanje")
+    var naziv=(par[0]||'').replace(/\s+/g,' ').trim();
+    var svrha=(svr[0]||'').replace(/^\d+\s*-\s*/,'').trim();
+    var opis=(naziv+' '+svrha).replace(/\s+/g,' ').trim();
+
+    var rr=izvodRedak(dM[1], iznos, opis);
+    if (rr) PDF_ROWS.push(rr);
+  }
+  renderPdfPreview();
+}
+
+// ── .wri izvod (strojni zapis banke) ───────────────────────────────
+// Slogovi s oznakom na kraju retka: 905 = transakcija, 907 = rekapitulacija.
+// Iznosi su cijeli brojevi u centima s predznakom, datumi GGGGMMDD.
+function izvodJeWri(t){
+  return /^\s*\d{6,}[^\n]{40,}\s(?:900|903)\s*$/m.test(String(t||'')) ||
+         /[^\n]{60,}\s905\s*$/m.test(String(t||''));
+}
+function izvodWriIznos(z, c){ return (c==='-'?-1:1) * (parseInt(z,10)||0) / 100; }
+function izvodWriDatum(g){ return g.slice(6,8)+'.'+g.slice(4,6)+'.'+g.slice(0,4); }
+function parseWriIzvod(text, dodaj){
+  izvodPocni(dodaj);
+  var linije=String(text||'').split(/\r?\n/);
+  var stavke=[], info={pocetno:null, zavrsno:null, nalogaTeret:null, nalogaKorist:null};
+
+  linije.forEach(function(ln){
+    var t=ln.replace(/\s+$/,''); if (t.length<10) return;
+    var tip=t.slice(-3);
+    if (tip==='905') {
+      var m=t.match(/(\d{8})(\d{8})[A-Z]{3}\s*([+-])(\d{12,18})/);
+      if (!m) return;
+      var ibM=t.slice(0,m.index).match(/[A-Z]{2}\d{13,32}/);
+      var naziv=t.slice(0, m.index);
+      if (ibM) naziv=naziv.slice(ibM.index+ibM[0].length);
+      naziv=naziv.replace(/\s+/g,' ').trim();
+      // svrha plaćanja dolazi odmah iza četveroslovne šifre namjene (npr. COST)
+      var rep=t.slice(m.index+m[0].length);
+      var sM=rep.match(/[A-Z]{4}([A-Za-zČĆŽŠĐčćžšđ][^\s]{0,2}[^\n]{0,36}?)(?:\s{2,}|$)/);
+      var svrha=sM ? sM[1].replace(/\s+/g,' ').trim() : '';
+      stavke.push({datum:izvodWriDatum(m[2]), iznos:izvodWriIznos(m[4], m[3]),
+                   opis:(naziv+' '+svrha).replace(/\s+/g,' ').trim()});
+    } else if (tip==='907') {
+      var V=[], re=/([+-])(\d{15})/g, mm;
+      while ((mm=re.exec(t))) V.push(izvodWriIznos(mm[2], mm[1]));
+      // Redoslijed: prethodno stanje, (rezervirano), novo stanje, dugovni, potražni, raspoloživo.
+      // Prihvaća se tek ako se zbroj slaže — inače se iz ovog sloga ništa ne uzima.
+      if (V.length>=6 && Math.abs((V[0]-V[3]+V[4])-V[2])<0.015) {
+        info.pocetno=izvFmt(V[0]); info.zavrsno=izvFmt(V[2]);
+        info.dugovni=izvFmt(V[3]); info.potrazni=izvFmt(V[4]);
+        // Broj naloga nije pouzdano čitljiv iz ovog sloga; postavlja se samo
+        // kad prometa uopće nema, da se prazan izvod prepozna kao prazan.
+        if (!V[3] && !V[4]) { info.nalogaTeret=0; info.nalogaKorist=0; }
+      }
+    }
+  });
+
+  // Smjer: ako rekapitulacija pokazuje samo dugovni ili samo potražni promet,
+  // sve stavke idu u taj smjer. Inače ostaje rashod, uz ručnu izmjenu na pregledu.
+  var dug=pdfBroj(info.dugovni), pot=pdfBroj(info.potrazni);
+  var predznak=-1;
+  if (dug===0 && pot>0) predznak=1;
+  izvodDodajSaldo(info);
+  stavke.forEach(function(x){
+    var rr=izvodRedak(x.datum, Math.abs(x.iznos)*predznak, x.opis);
+    if (rr) PDF_ROWS.push(rr);
+  });
+  renderPdfPreview();
+}
+
+// ── učitavanje datoteka ────────────────────────────────────────────
+// Bajtovi u tekst. .wri je u windows-1250, PDF-ov i HTML-ov tekst u UTF-8.
+function izvodTekstIzBajtova(buf){
+  var u=new Uint8Array(buf);
+  var dek=function(kod){ try { return new TextDecoder(kod).decode(u); } catch(e){ return null; } };
+  var t=dek('utf-8');
+  if (t==null || t.indexOf('\ufffd')>=0) { var t2=dek('windows-1250'); if (t2!=null) return t2; }
+  if (t!=null) return t;
+  var s2=''; for (var i=0;i<u.length;i++) s2+=String.fromCharCode(u[i]);
+  return s2;
+}
+function izvodIzPdf(bytes, gotovo, greska){
+  if (typeof pdfjsLib==='undefined') { greska('za PDF je potrebna internetska veza — zalijepite tekst izvoda'); return; }
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    pdfjsLib.getDocument(bytes).promise.then(function(pdf){
+      var str=[];
+      for (var p=1;p<=pdf.numPages;p++) {
+        str.push(pdf.getPage(p).then(function(page){
+          return page.getTextContent().then(function(tc){ return pdfItemsToLines(tc.items); });
+        }));
+      }
+      Promise.all(str).then(function(pages){
+        try { parsePdfIzvod(pages.join('\n'), true); gotovo(); }
+        catch(e){ greska(e.message||'greška pri čitanju'); }
+      });
+    }).catch(function(err){ greska(err.message||'PDF se ne može otvoriti'); });
+  } catch(e){ greska(e.message||'PDF se ne može otvoriti'); }
+}
+function izvodUcitajDatoteku(fl, gotovo, greska){
+  var ime=String(fl.name||'').toLowerCase();
+  if (/\.(xlsx|xls)$/.test(ime)) { greska('tablice se ne uvoze kao izvod — koristite PDF, HTML ili .wri'); return; }
+  var r=new FileReader();
+  r.onerror=function(){ greska('datoteka se ne može pročitati'); };
+  if (/\.pdf$/.test(ime) || fl.type==='application/pdf') {
+    r.onload=function(e){ izvodIzPdf(new Uint8Array(e.target.result), gotovo, greska); };
+    r.readAsArrayBuffer(fl); return;
+  }
+  r.onload=function(e){
+    var txt=izvodTekstIzBajtova(e.target.result);
+    try {
+      if (/<\s*(html|table|tr)\b/i.test(txt)) parseHtmlIzvod(txt, true);
+      else if (izvodJeWri(txt)) parseWriIzvod(txt, true);
+      else parsePdfIzvod(txt, true);
+      gotovo();
+    } catch(err){ greska(err.message||'oblik nije prepoznat'); }
+  };
+  r.readAsArrayBuffer(fl);
+}
+// Učitava datoteke jednu po jednu — redoslijed je važan jer se početno stanje
+// uzima od prvog, a konačno od zadnjeg izvoda.
+function handleIzvodUpload(inp){
+  var dat=inp && inp.files ? Array.prototype.slice.call(inp.files) : [];
+  if (!dat.length) return;
+  var status=document.getElementById('pdfStatus');
+  if (status) status.textContent='Učitavanje\u2026';
+  izvodPocni(false);   // briše i popis viđenih redaka, inače bi sljedeći uvoz
+                       // svoje retke smatrao dvostrukima i ništa ne bi prikazao
+  var i=0, ok=0, lose=[];
+  var sljedeca=function(){
+    if (i>=dat.length) {
+      if (status) {
+        var por = ok ? ('\u2713 Učitano '+ok+' '+izvMn(ok,'datoteka','datoteke','datoteka')) : '\u26a0 Ništa nije učitano';
+        if (IZVOD_DVOSTRUKI) por += ' \u00b7 '+IZVOD_DVOSTRUKI+' '+
+          izvMn(IZVOD_DVOSTRUKI,'istovjetan redak preskočen','istovjetna retka preskočena','istovjetnih redaka preskočeno');
+        status.textContent = por;
+      }
+      renderPdfPreview();
+      try { inp.value=''; } catch(e){}
+      if (lose.length && typeof pnAlert==='function') pnAlert('Nije pročitano:\n\n'+lose.join('\n'), {title:'Uvoz izvoda'});
+      return;
+    }
+    var fl=dat[i++];
+    izvodUcitajDatoteku(fl, function(){ ok++; sljedeca(); },
+                            function(por){ lose.push('\u2022 '+fl.name+' \u2014 '+por); sljedeca(); });
+  };
+  sljedeca();
+}
+function handlePdfUpload(inp){ return handleIzvodUpload(inp); }
 
 function pdvIzvodProvjeriDuplikat(datumDDMMYYYY, iznosAbs, opis) {
   var parts=datumDDMMYYYY.split('.'); var mo=parseInt(parts[1],10)-1;
@@ -4746,9 +4990,66 @@ function pdfKontrolaHtml(){
          nakHtml+'</div></div>';
 }
 
+// Odbacivanje učitanog izvoda — mora obrisati i podatke iz rekapitulacije,
+// inače bi pregled i dalje mislio da je izvod učitan.
+function pdfOdbaci(){
+  PDF_ROWS=[]; PDF_SALDO_INFO=null;
+  var w=document.getElementById('pdfPreviewWrap'); if (w) w.innerHTML='';
+  var st=document.getElementById('pdfStatus'); if (st) st.textContent='';
+}
+// Poruka kad je izvod učitan, a nijedan redak nije prepoznat.
+// Razlikuju se tri slučaja, jer traže tri različita postupka.
+function pdfPraznoHtml(){
+  var I=PDF_SALDO_INFO||{};
+  var ocekBroj = (I.nalogaTeret!=null || I.nalogaKorist!=null)
+                 ? ((I.nalogaTeret||0)+(I.nalogaKorist||0)) : null;
+  var stanje='';
+  if (I.pocetno || I.zavrsno) {
+    stanje='<div style="font-size:11.5px;color:var(--label3);margin-top:8px">Stanje računa po izvodu: <b>'+
+           (I.pocetno||'—')+'</b> &#8594; <b>'+(I.zavrsno||'—')+'</b> EUR</div>';
+  }
+  var nak=pdfBroj(I.naknada), nakTxt='';
+  if (nak!=null && Math.abs(nak)>0.004) {
+    nakTxt='<div style="font-size:11.5px;color:var(--label3);margin-top:6px">Izvod prikazuje obračunatu naknadu <b>'+
+           fmt2(Math.abs(nak))+' EUR</b>. Ona nema datum i stoji izvan prometa po računu, pa se ne knjiži automatski.</div>';
+  }
+  var naslov, tekst, boja, bg, ikona;
+  if (ocekBroj===0) {
+    // Erste šalje izvod svaki radni dan, i onda kad nije bilo prometa.
+    boja='var(--green)'; bg='var(--green-bg)'; ikona='&#10003;';
+    naslov='Izvod nema nijedne transakcije';
+    tekst='Toga dana nije bilo prometa po računu — izvod je uredno pročitan i nema se što proknjižiti. Rekapitulacija izvoda navodi <b>0 naloga</b>.';
+  } else if (ocekBroj>0) {
+    boja='var(--red)'; bg='var(--red-bg)'; ikona='&#9888;';
+    naslov='Izvod nije pročitan';
+    tekst='Rekapitulacija izvoda navodi <b>'+ocekBroj+'</b> '+(ocekBroj===1?'nalog':'naloga')+
+          ', a program nije prepoznao nijedan redak. Otvorite PDF, označite tablicu transakcija (Ctrl+A), '+
+          'kopirajte (Ctrl+C) i zalijepite u polje <b>ILI ZALIJEPITE TEKST IZVODA</b> iznad, pa kliknite <b>Analiziraj tekst</b>.';
+  } else {
+    boja='var(--orange)'; bg='var(--orange-bg)'; ikona='&#9888;';
+    naslov='Nijedan redak nije prepoznat';
+    tekst='U datoteci nije pronađen nijedan redak s datumom i iznosom, a nema ni rekapitulacije po kojoj bi se to provjerilo. '+
+          'Provjerite je li to bankovni izvod, ili zalijepite tekst izvoda u polje iznad i kliknite <b>Analiziraj tekst</b>.';
+  }
+  return '<div style="display:flex;gap:10px;padding:15px 17px;background:'+bg+';border-radius:12px">'+
+         '<span style="font-size:16px;color:'+boja+'">'+ikona+'</span><div style="flex:1">'+
+         '<div style="font-size:13px;font-weight:650;color:'+boja+'">'+naslov+'</div>'+
+         '<div style="font-size:11.5px;color:var(--label2);margin-top:4px;line-height:1.5">'+tekst+'</div>'+
+         stanje+nakTxt+
+         '<button class="hbtn" style="margin-top:11px;font-size:11px" onclick="pdfOdbaci()">U redu</button>'+
+         '</div></div>';
+}
+
 function renderPdfPreview() {
   var wrap=document.getElementById('pdfPreviewWrap'); if(!wrap) return;
-  if (!PDF_ROWS.length) { wrap.innerHTML=''; return; }
+  // Izvod je učitan, ali nije prepoznat nijedan redak. Prije se tu nije
+  // prikazivalo ništa — korisnik je vidio samo "Učitano 1 str." i prazninu
+  // i nije znao je li izvod prazan ili ga program nije pročitao.
+  if (!PDF_ROWS.length) {
+    if (!PDF_SALDO_INFO) { wrap.innerHTML=''; return; }
+    wrap.innerHTML=pdfPraznoHtml();
+    return;
+  }
 
   var saldoHtml='';
   if (PDF_SALDO_INFO && (PDF_SALDO_INFO.pocetno || PDF_SALDO_INFO.zavrsno)) {
@@ -4770,7 +5071,7 @@ function renderPdfPreview() {
   var h='<div class="card" style="padding:22px">';
   h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">';
   h+='<div><div style="font-size:14px;font-weight:650">Provjera prije knjiženja</div><div style="font-size:11.5px;color:var(--label3);margin-top:2px">'+PDF_ROWS.length+' redaka iz izvoda · svaki redak možete ručno ispraviti prije knjiženja</div></div>';
-  h+='<button class="hbtn" style="background:var(--red-bg);color:var(--red);font-size:11px" onclick="PDF_ROWS=[];renderPdfPreview();document.getElementById(\'pdfStatus\').textContent=\'\';">Odbaci izvod</button>';
+  h+='<button class="hbtn" style="background:var(--red-bg);color:var(--red);font-size:11px" onclick="pdfOdbaci()">Odbaci izvod</button>';
   h+='</div>';
 
   h+='<div style="display:flex;gap:10px;padding:13px 15px;background:var(--blue-bg);border-radius:10px;margin-bottom:14px">';
@@ -4837,7 +5138,7 @@ function renderPdfPreview() {
   h+='</tbody></table></div>';
 
   h+='<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">';
-  h+='<button class="hbtn" onclick="PDF_ROWS=[];renderPdfPreview();document.getElementById(\'pdfStatus\').textContent=\'\';">Odustani</button>';
+  h+='<button class="hbtn" onclick="pdfOdbaci()">Odustani</button>';
   h+='<button class="hbtn" style="background:var(--green);color:#fff" onclick="potvrdiPdfUvoz()">&#10003; Proknjiži ('+(nNova+nUpari)+')</button>';
   h+='</div></div>';
 
@@ -4950,9 +5251,7 @@ function potvrdiPdfUvoz() {
     pnZapamtiPotpis(pnPotpisIzvoda(r));
   }
   saveAll();
-  PDF_ROWS=[];
-  var pw=document.getElementById('pdfPreviewWrap'); if (pw) pw.innerHTML='';
-  var ps=document.getElementById('pdfStatus'); if (ps) ps.textContent='';
+  pdfOdbaci();
   var poruka='Proknjiženo: '+nNovih+' novih stavki';
   if (nUsklad) poruka+=', '+nUsklad+' uplata pripisano postojećim računima';
   if (greske.length) poruka+='\n\nNije proknjiženo ('+greske.length+') — odabrani račun više ne postoji.';
@@ -8723,9 +9022,9 @@ function renderUvoz() {
   h+='<div class="ap-grid uvozGrid">';
 
   h+='<div class="ap-card">'+apHead('bank','#007aff','Bankovni izvod','Stavke se same raspore\u0111uju po knjigovodstvenim kategorijama');
-  h+=apDrop('pdfInput','up','#007aff','Povucite izvod ovdje','Mo\u017eete odabrati i vi\u0161e dnevnih izvadaka odjednom<br>PDF \u00b7 CSV \u00b7 TXT \u00b7 XLS / XLSX','application/pdf',false,'handlePdfUpload(this)');
+  h+=apDrop('pdfInput','up','#007aff','Povucite izvod ovdje','Mo\u017eete odabrati i vi\u0161e dnevnih izvadaka odjednom<br>PDF \u00b7 HTML \u00b7 WRI \u00b7 TXT / CSV','.pdf,.html,.htm,.wri,.txt,.csv,application/pdf,text/html,text/plain',true,'handleIzvodUpload(this)');
   h+='<div id="pdfDropZone" style="display:none"></div>';
-  h+=apPaste('pdfPasteText','Ili zalijepite tekst izvoda','Otvorite PDF, ozna\u010dite tablicu transakcija (Ctrl+A), kopirajte (Ctrl+C) i zalijepite ovdje\u2026','Lijepljenje teksta radi i bez internetske veze.');
+  h+=apPaste('pdfPasteText','Ili zalijepite tekst izvoda','Otvorite PDF, ozna\u010dite tablicu transakcija (Ctrl+A), kopirajte (Ctrl+C) i zalijepite ovdje\u2026','Lijepljenje teksta radi i bez internetske veze. Od tri oblika koja banka \u0161alje najto\u010dniji je HTML, pa .wri \u2014 u njima su stupci ve\u0107 razdvojeni.');
   h+='<div class="ap-actions"><button class="ap-btn pri" onclick="parsePdfIzvod(document.getElementById(\'pdfPasteText\').value)">'+apSvg('bolt',15,2.2)+'<span>Analiziraj tekst</span></button><span id="pdfStatus" class="ap-status"></span></div>';
   h+='</div>';
 
