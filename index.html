@@ -899,6 +899,9 @@ html[data-theme="dark"] .ap-total.green{color:#30d158}
 .ap-info-i{color:#007aff;flex-shrink:0;margin-top:1px}
 html[data-theme="dark"] .ap-info{background:rgba(10,132,255,.12)}
 .ap-list{margin-top:14px;border-radius:14px;overflow:hidden;background:var(--surface);box-shadow:inset 0 0 0 .5px var(--sep)}
+/* Popis se s vremenom puni (svako ručno razvrstavanje doda pravilo) i prije je
+   svojom visinom gurao pregled uvezenog izvoda cijeli zaslon niže. */
+.ap-list.ap-list-scroll{max-height:320px;overflow-y:auto}
 .ap-head+.ap-list{margin-top:0}
 .ap-row{display:flex;align-items:center;gap:12px;padding:11px 14px;position:relative;transition:background .12s}
 .ap-row+.ap-row:before{content:'';position:absolute;top:0;left:58px;right:0;height:.5px;background:var(--sep)}
@@ -1203,7 +1206,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v156</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v157</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1335,7 +1338,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v156';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v157';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -4887,6 +4890,7 @@ function handleIzvodUpload(inp){
         status.textContent = por;
       }
       renderPdfPreview();
+      pdfPregledUFokus();
       try { inp.value=''; } catch(e){}
       if (lose.length && typeof pnAlert==='function') pnAlert('Nije pročitano:\n\n'+lose.join('\n'), {title:'Uvoz izvoda'});
       return;
@@ -5040,6 +5044,28 @@ function pdfPraznoHtml(){
          '</div></div>';
 }
 
+// Pregled uvezenog izvoda stoji ispod kartica, pa na širem zaslonu zna završiti
+// izvan vidljivog dijela stranice. Nakon učitavanja izvoda skoči se na njega —
+// inače korisnik vidi samo "Učitano 1 datoteka" i misli da se ništa nije dogodilo.
+function pdfPregledUFokus(){
+  setTimeout(function(){
+    var w=document.getElementById('pdfPreviewWrap');
+    if (!w || !w.innerHTML) return;
+    try { w.scrollIntoView({behavior:'smooth', block:'start'}); }
+    catch(e){ try { w.scrollIntoView(); } catch(e2){} }
+  }, 60);
+}
+// Gumb "Analiziraj tekst": pročitaj zalijepljeni tekst i pokaži rezultat.
+function pdfAnalizirajZalijepljeno(){
+  var el=document.getElementById('pdfPasteText');
+  parsePdfIzvod(el ? el.value : '');
+  var st=document.getElementById('pdfStatus');
+  if (st) st.textContent = PDF_ROWS.length
+    ? ('\u2713 Prepoznato '+PDF_ROWS.length+' '+izvMn(PDF_ROWS.length,'redak','retka','redaka'))
+    : '\u26a0 Nijedan redak nije prepoznat';
+  pdfPregledUFokus();
+}
+
 function renderPdfPreview() {
   var wrap=document.getElementById('pdfPreviewWrap'); if(!wrap) return;
   // Izvod je učitan, ali nije prepoznat nijedan redak. Prije se tu nije
@@ -5068,15 +5094,17 @@ function renderPdfPreview() {
     else nPresk++;
   });
 
-  var h='<div class="card" style="padding:22px">';
+  var h='<div class="sec-title" style="margin-top:6px">Pregled u\u010ditanog izvoda</div>';
+  h+='<div class="card" style="padding:22px">';
   h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">';
-  h+='<div><div style="font-size:14px;font-weight:650">Provjera prije knjiženja</div><div style="font-size:11.5px;color:var(--label3);margin-top:2px">'+PDF_ROWS.length+' redaka iz izvoda · svaki redak možete ručno ispraviti prije knjiženja</div></div>';
+  h+='<div><div style="font-size:14px;font-weight:650">Provjera prije knjiženja</div><div style="font-size:11.5px;color:var(--label3);margin-top:2px">'+PDF_ROWS.length+' '+izvMn(PDF_ROWS.length,'redak','retka','redaka')+' iz izvoda · svaki redak možete ručno ispraviti prije knjiženja</div></div>';
   h+='<button class="hbtn" style="background:var(--red-bg);color:var(--red);font-size:11px" onclick="pdfOdbaci()">Odbaci izvod</button>';
   h+='</div>';
 
   h+='<div style="display:flex;gap:10px;padding:13px 15px;background:var(--blue-bg);border-radius:10px;margin-bottom:14px">';
   h+='<span style="font-size:15px;color:var(--nav-500)">&#8505;</span><div style="flex:1"><div style="font-size:12.5px;font-weight:650;color:var(--label)">'+
-     nUpari+' uplata zatvara postojeće račune ('+fmt2(sumUpari)+' EUR) · '+nNova+' novih stavki ('+fmt2(sumNova)+' EUR)'+(nPresk?' · '+nPresk+' preskočeno':'')+'</div>';
+     nUpari+' '+izvMn(nUpari,'uplata zatvara postojeći račun','uplate zatvaraju postojeće račune','uplata zatvara postojeće račune')+' ('+fmt2(sumUpari)+' EUR) · '+
+     nNova+' '+izvMn(nNova,'nova stavka','nove stavke','novih stavki')+' ('+fmt2(sumNova)+' EUR)'+(nPresk?' · '+nPresk+' preskočeno':'')+'</div>';
   h+='<div style="font-size:11px;color:var(--label3);margin-top:3px">Uplata koja se poveže s postojećim računom <b>ne stvara novi trošak</b> — trošak ostaje u svom mjesecu, a u novčani tijek ulazi samo odljev na datum izvoda. Djelomične uplate se zbrajaju kao rate.</div>';
   h+='</div></div>';
 
@@ -5252,8 +5280,8 @@ function potvrdiPdfUvoz() {
   }
   saveAll();
   pdfOdbaci();
-  var poruka='Proknjiženo: '+nNovih+' novih stavki';
-  if (nUsklad) poruka+=', '+nUsklad+' uplata pripisano postojećim računima';
+  var poruka='Proknjiženo: '+nNovih+' '+izvMn(nNovih,'nova stavka','nove stavke','novih stavki');
+  if (nUsklad) poruka+=', '+nUsklad+' '+izvMn(nUsklad,'uplata pripisana','uplate pripisane','uplata pripisano')+' postojećim računima';
   if (greske.length) poruka+='\n\nNije proknjiženo ('+greske.length+') — odabrani račun više ne postoji.';
   pnAlert('✓ '+poruka, {title:'Izvod proknjižen'});
   renderRDG();
@@ -9025,7 +9053,7 @@ function renderUvoz() {
   h+=apDrop('pdfInput','up','#007aff','Povucite izvod ovdje','Mo\u017eete odabrati i vi\u0161e dnevnih izvadaka odjednom<br>PDF \u00b7 HTML \u00b7 WRI \u00b7 TXT / CSV','.pdf,.html,.htm,.wri,.txt,.csv,application/pdf,text/html,text/plain',true,'handleIzvodUpload(this)');
   h+='<div id="pdfDropZone" style="display:none"></div>';
   h+=apPaste('pdfPasteText','Ili zalijepite tekst izvoda','Otvorite PDF, ozna\u010dite tablicu transakcija (Ctrl+A), kopirajte (Ctrl+C) i zalijepite ovdje\u2026','Lijepljenje teksta radi i bez internetske veze. Od tri oblika koja banka \u0161alje najto\u010dniji je HTML, pa .wri \u2014 u njima su stupci ve\u0107 razdvojeni.');
-  h+='<div class="ap-actions"><button class="ap-btn pri" onclick="parsePdfIzvod(document.getElementById(\'pdfPasteText\').value)">'+apSvg('bolt',15,2.2)+'<span>Analiziraj tekst</span></button><span id="pdfStatus" class="ap-status"></span></div>';
+  h+='<div class="ap-actions"><button class="ap-btn pri" onclick="pdfAnalizirajZalijepljeno()">'+apSvg('bolt',15,2.2)+'<span>Analiziraj tekst</span></button><span id="pdfStatus" class="ap-status"></span></div>';
   h+='</div>';
 
   var brojPravila = PN_RULES.length;
@@ -9033,7 +9061,7 @@ function renderUvoz() {
   h+='<div class="ap-card">'+apHead('brain','#af52de','Knjigovodstvena pravila', brojPravila+' '+(brojPravila===1?'nau\u010deno pravilo':'nau\u010denih pravila'), desno);
   h+=apInfo('Kako aplikacija u\u010di','Kad na pregledu promijenite kategoriju stavke, aplikacija zapamti partnera i sljede\u0107i put ga sama svrsta na isto mjesto. Nau\u010dena pravila imaju prednost pred ugra\u0111enima.');
   if (brojPravila>0) {
-    h+='<div class="ap-list">';
+    h+='<div class="ap-list'+(brojPravila>7?' ap-list-scroll':'')+'">';
     PN_RULES.forEach(function(rl, idx){
       var kt=ALL_TABS.filter(function(t){return t.id===rl.kat;})[0];
       var isIn = rl.kat==='prihodi26'||rl.kat==='dnevni';
