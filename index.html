@@ -1203,7 +1203,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v153</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v154</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1335,7 +1335,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v153';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v154';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -4502,21 +4502,32 @@ function handlePdfUpload(inp) {
 // Grupira PDF.js text iteme u prave retke prema Y-poziciji (umjesto spajanja svega u jedan dugacki red)
 function pdfItemsToLines(items) {
   var words = items.map(function(it){
-    var y = it.transform ? it.transform[5] : 0;
-    return {text: it.str, y: y};
+    var t = it.transform || [];
+    return {text: it.str, x: (t[4]||0), y: (t[5]||0), w: (it.width||0)};
   }).filter(function(w){ return w.text && w.text.trim().length>0; });
   if (!words.length) return '';
-  words.sort(function(a,b){ return b.y - a.y; });
+  words.sort(function(a,b){ return (b.y - a.y) || (a.x - b.x); });
+  // Veliki vodoravni razmak znači novi stupac izvoda (dobavljač, opis plaćanja,
+  // poziv na broj, iznos). Čuva se kao dvostruki razmak da se stupci kasnije mogu
+  // razdvojiti — prije se sve spajalo jednim razmakom i stupci su se gubili.
+  var sastavi=function(red){
+    red.sort(function(a,b){ return a.x - b.x; });
+    var t='';
+    for (var j=0;j<red.length;j++) {
+      if (j) {
+        var raz = red[j].x - (red[j-1].x + (red[j-1].w||0));
+        t += (raz > 8) ? '  ' : ' ';
+      }
+      t += red[j].text;
+    }
+    return t;
+  };
   var lines=[]; var cur=[words[0]];
   for (var i=1;i<words.length;i++) {
-    if (Math.abs(words[i].y - cur[cur.length-1].y) > 2.5) {
-      lines.push(cur.map(function(w){return w.text;}).join(' '));
-      cur=[words[i]];
-    } else {
-      cur.push(words[i]);
-    }
+    if (Math.abs(words[i].y - cur[cur.length-1].y) > 2.5) { lines.push(sastavi(cur)); cur=[words[i]]; }
+    else cur.push(words[i]);
   }
-  lines.push(cur.map(function(w){return w.text;}).join(' '));
+  lines.push(sastavi(cur));
   return lines.join('\n');
 }
 
@@ -4555,6 +4566,14 @@ function izvuciSaldoInfo(text) {
   if (m3) info.nalogaTeret = parseInt(m3[1],10);
   var m4 = text.match(/Naloga u korist\s*(\d+)/i);
   if (m4) info.nalogaKorist = parseInt(m4[1],10);
+  // Kontrolni zbrojevi — po njima se provjerava je li izvod pročitan u cijelosti
+  var iznRe=/(-?\d{1,3}(?:\.\d{3})*,\d{2})/;
+  var m5 = text.match(new RegExp('Dugovni\\s+promet\\s*'+iznRe.source,'i'));
+  if (m5) info.dugovni = m5[1];
+  var m6 = text.match(new RegExp('Potra\u017eni\\s+promet\\s*'+iznRe.source,'i'));
+  if (m6) info.potrazni = m6[1];
+  var m7 = text.match(new RegExp('Obra\u010dunata\\s+naknada\\s*'+iznRe.source,'i'));
+  if (m7) info.naknada = m7[1];
   return info;
 }
 
@@ -4578,7 +4597,27 @@ function parsePdfIzvod(text) {
     var amtStr=aM[1].replace(/\./g,'').replace(',','.');
     var amtAbs=Math.abs(parseFloat(amtStr)); if(isNaN(amtAbs)||amtAbs===0) continue;
 
-    var opis=ln.replace(dM[0],'').replace(aM[1],'').replace(/\s+/g,' ').trim();
+    // Opis iz stupaca: naziv partnera + svrha plaćanja, bez rednog broja,
+    // modela poziva na broj (HR99) i referenci. Ako stupci nisu prepoznati,
+    // ostaje raniji način — cijeli redak bez datuma i iznosa.
+    var opis='';
+    var polja=ln.split(/\s{2,}/).map(function(z){return z.trim();}).filter(Boolean);
+    if (polja.length>=3) {
+      var naziv='', svrha='';
+      for (var pi=0; pi<polja.length; pi++) {
+        var fp=polja[pi];
+        if (/^\d{2}\.\d{2}\.\d{4}\.?$/.test(fp)) continue;
+        if (/^-?\d{1,3}(?:\.\d{3})*,\d{2}$/.test(fp)) continue;
+        if (/^HR\d{2}(\s|$)/i.test(fp)) continue;
+        if (/^[A-Z]{2}\d{10,}$/i.test(fp)) continue;
+        if (/^\d{4}-\d+/.test(fp)) continue;
+        var mm=fp.match(/^(\d+)\s*-\s*(.+)$/);
+        if (mm) { if (!svrha) svrha=mm[2].trim(); continue; }
+        if (!naziv) naziv=fp;
+      }
+      opis=(naziv+' '+svrha).replace(/\s+/g,' ').trim();
+    }
+    if (!opis) opis=ln.replace(dM[0],'').replace(aM[1],'').replace(/\s+/g,' ').trim();
     // Odbaci retke koji su samo IBAN/referenca (nastavak prethodnog retka transakcije, nemaju stvarni opis partnera)
     if (/^HR\d{2}\s|^\d{4}-\d|^HR\d{2}\s*\d/.test(opis) && opis.replace(/[\d\sHRhr\-]/g,'').length<3) continue;
     if (opis.length>70) opis=opis.slice(0,70);
@@ -4651,6 +4690,62 @@ function pnOznakaCilja(c){
          (ost>0.01 ? ('ostaje '+fmt2(ost)) : ('ukupno '+fmt2(parseFloat(r.iznos)||0)));
 }
 
+// Pretvara "1.502,79" / "-31,77" u broj. Prazno ili neprepoznato → null.
+function pdfBroj(t){
+  if (t==null) return null;
+  var c=String(t).replace(/\s/g,'').replace(/\./g,'').replace(',','.');
+  var n=parseFloat(c);
+  return isFinite(n) ? n : null;
+}
+// Kontrolna kutija — provjerava je li izvod pročitan u cijelosti.
+// Izvod u rekapitulaciji sam navodi broj naloga i dugovni/potražni promet;
+// to su jedini pouzdani kontrolni zbrojevi i po njima se vidi
+// je li koji redak promaknuo.
+function pdfKontrolaHtml(){
+  var I=PDF_SALDO_INFO||{};
+  var ocekBroj = (I.nalogaTeret!=null || I.nalogaKorist!=null)
+                 ? ((I.nalogaTeret||0)+(I.nalogaKorist||0)) : null;
+  var dug=pdfBroj(I.dugovni), pot=pdfBroj(I.potrazni);
+  var ocekIzn = (dug!=null || pot!=null) ? (Math.abs(dug||0)+Math.abs(pot||0)) : null;
+  var imaBroj=0, imaIzn=0;
+  PDF_ROWS.forEach(function(r){ imaBroj++; imaIzn+=Math.abs(parseFloat(r.iznos)||0); });
+
+  var greske=[], uredu=[];
+  if (ocekBroj!=null) {
+    if (ocekBroj===imaBroj) uredu.push('broj naloga ('+imaBroj+')');
+    else greske.push('Izvod navodi <b>'+ocekBroj+'</b> '+(ocekBroj===1?'nalog':'naloga')+
+                     ', a pročitano je <b>'+imaBroj+'</b> — razlika '+Math.abs(ocekBroj-imaBroj));
+  }
+  if (ocekIzn!=null) {
+    if (Math.abs(ocekIzn-imaIzn)<0.015) uredu.push('promet ('+fmt2(imaIzn)+' EUR)');
+    else greske.push('Promet po izvodu <b>'+fmt2(ocekIzn)+' EUR</b>, a pročitano <b>'+fmt2(imaIzn)+
+                     ' EUR</b> — razlika '+fmt2(Math.abs(ocekIzn-imaIzn))+' EUR');
+  }
+  // Naknada stoji izvan prometa po računu i nema svoj datum, pa se ne knjiži sama.
+  var nak=pdfBroj(I.naknada), nakHtml='';
+  if (nak!=null && Math.abs(nak)>0.004) {
+    nakHtml='<div style="font-size:11px;color:var(--label3);margin-top:6px">Izvod prikazuje i <b>obračunatu naknadu '+
+            fmt2(Math.abs(nak))+' EUR</b>. Ona stoji izvan prometa po računu i nema datum, pa se ne knjiži automatski — '+
+            'ako je želite u troškovima, dodajte je ručno u rubriku <b>Bankovni troškovi</b>.</div>';
+  }
+  if (!greske.length && !uredu.length && !nakHtml) return '';
+
+  if (greske.length) {
+    return '<div style="display:flex;gap:10px;padding:13px 15px;background:var(--red-bg);border-radius:10px;margin-bottom:14px">'+
+           '<span style="font-size:15px;color:var(--red)">&#9888;</span><div style="flex:1">'+
+           '<div style="font-size:12.5px;font-weight:650;color:var(--red)">Izvod nije pročitan u cijelosti</div>'+
+           '<div style="font-size:11px;color:var(--label2);margin-top:3px">'+greske.join('<br>')+'</div>'+
+           '<div style="font-size:11px;color:var(--label3);margin-top:4px">Provjerite redke ispod i po potrebi ih dodajte ručno prije knjiženja.</div>'+
+           nakHtml+'</div></div>';
+  }
+  return '<div style="display:flex;gap:10px;padding:13px 15px;background:var(--green-bg);border-radius:10px;margin-bottom:14px">'+
+         '<span style="font-size:15px;color:var(--green)">&#10003;</span><div style="flex:1">'+
+         '<div style="font-size:12.5px;font-weight:650;color:var(--green)">Slaže se s rekapitulacijom izvoda'+
+         (uredu.length?' — '+uredu.join(', '):'')+'</div>'+
+         '<div style="font-size:11px;color:var(--label3);margin-top:3px">Svaki nalog s izvoda je prepoznat i zbroj prometa odgovara.</div>'+
+         nakHtml+'</div></div>';
+}
+
 function renderPdfPreview() {
   var wrap=document.getElementById('pdfPreviewWrap'); if(!wrap) return;
   if (!PDF_ROWS.length) { wrap.innerHTML=''; return; }
@@ -4683,6 +4778,11 @@ function renderPdfPreview() {
      nUpari+' uplata zatvara postojeće račune ('+fmt2(sumUpari)+' EUR) · '+nNova+' novih stavki ('+fmt2(sumNova)+' EUR)'+(nPresk?' · '+nPresk+' preskočeno':'')+'</div>';
   h+='<div style="font-size:11px;color:var(--label3);margin-top:3px">Uplata koja se poveže s postojećim računom <b>ne stvara novi trošak</b> — trošak ostaje u svom mjesecu, a u novčani tijek ulazi samo odljev na datum izvoda. Djelomične uplate se zbrajaju kao rate.</div>';
   h+='</div></div>';
+
+  // ── Kontrola: ono što izvod sam o sebi kaže u rekapitulaciji
+  // usporedi se s onim što je program pročitao. Ako se ne poklapa,
+  // nešto je ostalo neprepoznato i to se mora vidjeti prije knjiženja.
+  h+=pdfKontrolaHtml();
 
   h+='<div class="tbl-wrap"><table>';
   h+='<colgroup><col style="width:62px"><col style="width:96px"><col><col style="width:150px"><col><col style="width:30px"></colgroup>';
