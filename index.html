@@ -1206,7 +1206,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v158</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v159</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1338,7 +1338,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v158';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v159';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -1401,6 +1401,10 @@ var ALL_TABS = [
   {id:'prihodi26',     lbl:'Prihodi 2026',        grp:true,  hl:true},
   {id:'dnevni',        lbl:'Prodaja po danima',   grp:true,  hl:true},
   {id:'radni_sati',    lbl:'Radni sati',          grp:true},
+  // Plaće su od početka postojale u TD_TABS, ROWS_DEF i TAB_TO_P, ali ne i ovdje,
+  // pa se rubrika nije nudila ni u Transakcijama ni pri knjiženju izvoda.
+  {id:'place_mgmt',    lbl:'Plaće – Management'},
+  {id:'place_ostali',  lbl:'Plaće – Ostali'},
   {id:'knjigovodstvo', lbl:'Knjigovodstvo'},
   {id:'nabava_proteina',lbl:'Nabava proteina'},
   {id:'nabava_casa',   lbl:'Nabava čaša'},
@@ -4483,18 +4487,38 @@ function pdfItemsToLines(items) {
   }).filter(function(w){ return w.text && w.text.trim().length>0; });
   if (!words.length) return '';
   words.sort(function(a,b){ return (b.y - a.y) || (a.x - b.x); });
-  // Veliki vodoravni razmak znači novi stupac izvoda (dobavljač, opis plaćanja,
-  // poziv na broj, iznos). Čuva se kao dvostruki razmak da se stupci kasnije mogu
-  // razdvojiti — prije se sve spajalo jednim razmakom i stupci su se gubili.
+  // Stupci izvoda (platitelj, opis plaćanja, poziv na broj, iznos) zadržavaju
+  // svoj vodoravni položaj: svaka riječ se postavlja na mjesto izvedeno iz
+  // njezine x-koordinate. Prije se svaki razmak svodio na jedan ili dva, pa su
+  // retci bili poravnati samo prividno — nastavak retka transakcije nije se
+  // mogao vratiti u stupac iz kojeg je došao.
+  // Mjerilo (širina jednog znaka) računa se iz samog dokumenta. Koje god bilo,
+  // isto je za sve retke, pa poravnanje među njima ostaje točno.
+  var sirine=words.map(function(w){ return (w.w>0 && w.text.length) ? (w.w/w.text.length) : 0; })
+                  .filter(function(v){ return v>0.5 && v<40; }).sort(function(a,b){ return a-b; });
+  // Pola prosječne širine znaka: razmak između stupaca tako ispadne dovoljno
+  // širok da se stupci nikad ne slijepe, a poravnanje među retcima ostaje točno
+  // jer je mjerilo isto za sve.
+  var ZNAK = (sirine.length ? sirine[Math.floor(sirine.length/2)] : 5) / 2;
+  if (!(ZNAK>0.3)) ZNAK=2.5;
+
+  var razmak=function(t, doStupca, najmanje){
+    var n=Math.max(doStupca-t.length, najmanje);
+    return t + new Array(n+1).join(' ');
+  };
   var sastavi=function(red){
     red.sort(function(a,b){ return a.x - b.x; });
     var t='';
     for (var j=0;j<red.length;j++) {
-      if (j) {
-        var raz = red[j].x - (red[j-1].x + (red[j-1].w||0));
-        t += (raz > 8) ? '  ' : ' ';
+      var stupac=Math.round(red[j].x/ZNAK);
+      if (j===0) { t=razmak('', stupac, 0); }
+      else {
+        // Fizički razmak veći od 8 pt je granica stupca i mora ostati barem dva
+        // znaka širok, inače bi se dva stupca čitala kao jedno polje.
+        var raz=red[j].x - (red[j-1].x + (red[j-1].w||0));
+        t=razmak(t, stupac, raz>8 ? 2 : 1);
       }
-      t += red[j].text;
+      t+=red[j].text;
     }
     return t;
   };
@@ -4513,10 +4537,19 @@ var PN_RULES = (function(){
   return [];
 })();
 function savePnRules() { try { localStorage.setItem('pn_rules', JSON.stringify(PN_RULES)); } catch(e) {} }
+// Naučena pravila imaju prednost pred ugrađenima — tako piše u aplikaciji,
+// ali se prije nije tako ponašalo: tražilo se redom kojim su zapisana, pa je
+// ugrađeno pravilo dodano pri pokretanju pobjeđivalo ispravak koji je korisnik
+// napravio kasnije. Sada se u dva prolaza: prvo naučena, pa ugrađena.
 function pravioZaPartnera(opis) {
-  var o=(opis||'').toLowerCase();
-  for (var i=0;i<PN_RULES.length;i++) {
-    if (o.indexOf(PN_RULES[i].partner.toLowerCase())>=0) return PN_RULES[i].kat;
+  var o=(opis||'').toLowerCase(), i;
+  for (i=0;i<PN_RULES.length;i++) {
+    if (PN_RULES[i].ugr) continue;
+    if (o.indexOf(String(PN_RULES[i].partner||'').toLowerCase())>=0) return PN_RULES[i].kat;
+  }
+  for (i=0;i<PN_RULES.length;i++) {
+    if (!PN_RULES[i].ugr) continue;
+    if (o.indexOf(String(PN_RULES[i].partner||'').toLowerCase())>=0) return PN_RULES[i].kat;
   }
   return null;
 }
@@ -4524,8 +4557,9 @@ function zapamtiPravilo(opis, kat) {
   if (!opis || !kat) return;
   var partner = opis.split(/\s{2,}/)[0].split(' ').slice(0,3).join(' ').trim();
   if (!partner) return;
-  var existing = PN_RULES.filter(function(r){ return r.partner.toLowerCase()===partner.toLowerCase(); })[0];
-  if (existing) existing.kat = kat;
+  var existing = PN_RULES.filter(function(r){ return String(r.partner||'').toLowerCase()===partner.toLowerCase(); })[0];
+  // Korisnikov ispravak više nije ugrađeno pravilo — dobiva prednost.
+  if (existing) { existing.kat = kat; delete existing.ugr; }
   else PN_RULES.push({partner:partner, kat:kat});
   savePnRules();
 }
@@ -4640,6 +4674,29 @@ function izvodRedak(datum, iznos, opis){
   };
 }
 
+// Polja jednog retka izvoda, s početnim stupcem svakog. Stupac treba zato
+// što se nastavak retka mora vratiti u svoj stupac — "HRVATSKE" pripada nazivu
+// platitelja, a "plaće za zdrav. za 09/26" opisu plaćanja.
+function izvodPolja(ln){
+  var out=[], re=/\S(?:[^\n]*?\S)?(?=\s{2,}|$)/g, m;
+  while ((m=re.exec(String(ln||'')))) {
+    var t=m[0].trim();
+    if (t) out.push({t:t, x:m.index});
+    if (re.lastIndex<=m.index) re.lastIndex=m.index+1;
+  }
+  return out;
+}
+// Datumi, iznosi, modeli poziva na broj, IBAN-i, reference i šifre namjene
+// nisu opis — oni se iz opisa izbacuju.
+function izvodPoljeBezZnacenja(t){
+  return /^\d{2}\.\d{2}\.\d{4}\.?$/.test(t) ||
+         /^-?\d{1,3}(?:\.\d{3})*,\d{2}$/.test(t) ||
+         /^HR\d{2}(\s|$)/i.test(t) ||
+         /^[A-Z]{2}\d{10,}$/i.test(t) ||
+         /^\d{4}-\d+/.test(t) ||
+         /^[A-Z]{4}$/.test(t);          // COST, GOVT, SALA — šifra namjene
+}
+
 function parsePdfIzvod(text, dodaj) {
   izvodPocni(dodaj);
   izvodDodajSaldo(izvuciSaldoInfo(text));
@@ -4652,49 +4709,59 @@ function parsePdfIzvod(text, dodaj) {
 
   // duplo hvatanje istog retka sprječava IZVOD_VIDJENI u izvodRedak() (npr. Datum valute + Datum obrade su isti redak, prikazuju se dvaput ako format ima ponovljene datume)
 
+  // Prvi prolaz: transakcije i njihovi nastavci. Jedna transakcija u Erste PDF-u
+  // zauzima do četiri retka — iznos stoji samo u prvom, a ostatak opisa
+  // („plaće za zdrav. za 09/26") u sljedećima. Prije su se ti retci odbacivali,
+  // pa su dvije različite uplate doprinosa izgledale potpuno isto.
+  var stavke=[], tek=null;
   for (var i=0;i<lines.length;i++) {
-    var ln=lines[i].trim(); if(!ln) continue;
-    if (stanjeRe.test(ln)) continue;
-    var dM=ln.match(dateRe); if(!dM) continue;
-    var aM=ln.match(amtRe); if(!aM) continue;
-    var amtStr=aM[1].replace(/\./g,'').replace(',','.');
-    var amtAbs=Math.abs(parseFloat(amtStr)); if(isNaN(amtAbs)||amtAbs===0) continue;
+    var ln=lines[i].replace(/\s+$/,''); if(!ln.trim()) continue;
+    if (stanjeRe.test(ln)) { tek=null; continue; }
+    var dM=ln.match(dateRe);
+    var aM=ln.match(amtRe);
+    var polja=izvodPolja(ln);
 
-    // Opis iz stupaca: naziv partnera + svrha plaćanja, bez rednog broja,
-    // modela poziva na broj (HR99) i referenci. Ako stupci nisu prepoznati,
-    // ostaje raniji način — cijeli redak bez datuma i iznosa.
-    var opis='';
-    var polja=ln.split(/\s{2,}/).map(function(z){return z.trim();}).filter(Boolean);
-    if (polja.length>=3) {
-      var naziv='', svrha='';
+    if (dM && aM) {
+      var amtStr=aM[1].replace(/\./g,'').replace(',','.');
+      var amtAbs=Math.abs(parseFloat(amtStr));
+      if (isNaN(amtAbs)||amtAbs===0) { tek=null; continue; }
+      tek={datum:dM[1], iznos:amtAbs, naziv:'', svrha:'', xNaziv:-1, xSvrha:-1, cijeli:ln};
       for (var pi=0; pi<polja.length; pi++) {
-        var fp=polja[pi];
-        if (/^\d{2}\.\d{2}\.\d{4}\.?$/.test(fp)) continue;
-        if (/^-?\d{1,3}(?:\.\d{3})*,\d{2}$/.test(fp)) continue;
-        if (/^HR\d{2}(\s|$)/i.test(fp)) continue;
-        if (/^[A-Z]{2}\d{10,}$/i.test(fp)) continue;
-        if (/^\d{4}-\d+/.test(fp)) continue;
+        var fp=polja[pi].t;
+        if (izvodPoljeBezZnacenja(fp)) continue;
         var mm=fp.match(/^(\d+)\s*-\s*(.+)$/);
-        if (mm) { if (!svrha) svrha=mm[2].trim(); continue; }
-        if (!naziv) naziv=fp;
+        if (mm) { if (!tek.svrha) { tek.svrha=mm[2].trim(); tek.xSvrha=polja[pi].x; } continue; }
+        if (!tek.naziv) { tek.naziv=fp; tek.xNaziv=polja[pi].x; }
       }
-      opis=(naziv+' '+svrha).replace(/\s+/g,' ').trim();
+      stavke.push(tek);
+      continue;
     }
-    if (!opis) opis=ln.replace(dM[0],'').replace(aM[1],'').replace(/\s+/g,' ').trim();
-    // Odbaci retke koji su samo IBAN/referenca (nastavak prethodnog retka transakcije, nemaju stvarni opis partnera)
+    // Nastavak retka: nema iznosa. Svako polje se vraća u stupac iz kojeg je došlo.
+    if (!tek || aM) { if (aM) tek=null; continue; }
+    for (var pj=0; pj<polja.length; pj++) {
+      var ft=polja[pj].t, fx=polja[pj].x;
+      if (izvodPoljeBezZnacenja(ft)) continue;
+      if (tek.xSvrha>=0 && Math.abs(fx-tek.xSvrha)<=4) tek.svrha+=' '+ft;
+      else if (tek.xNaziv>=0 && Math.abs(fx-tek.xNaziv)<=4) tek.naziv+=' '+ft;
+    }
+  }
+
+  // Smjer (prihod/rashod): ako izvod ima SAMO isplate (naloga u korist=0) ili SAMO
+  // uplate (naloga na teret=0), sve stavke sigurno idu u taj smjer. Inače je zadano
+  // rashod, uz mogućnost ručne izmjene na pregledu. U HTML-u i .wri zapisu smjer se
+  // ne pogađa — ondje su isplata i uplata zasebni stupci.
+  var predznak = -1;
+  var _I = PDF_SALDO_INFO||{};
+  if (_I.nalogaTeret===0 && _I.nalogaKorist>0) predznak = 1;
+
+  // Drugi prolaz: od sabranih stavki redci pregleda.
+  for (var si=0; si<stavke.length; si++) {
+    var st=stavke[si];
+    var opis=(st.naziv+' '+st.svrha).replace(/\s+/g,' ').trim();
+    if (!opis) opis=st.cijeli.replace(/\d{2}\.\d{2}\.\d{4}\.?/,'').replace(/-?\d{1,3}(?:\.\d{3})*,\d{2}/,'').replace(/\s+/g,' ').trim();
+    // Redak koji je ostao samo IBAN ili referenca nije transakcija
     if (/^HR\d{2}\s|^\d{4}-\d|^HR\d{2}\s*\d/.test(opis) && opis.replace(/[\d\sHRhr\-]/g,'').length<3) continue;
-    if (opis.length>70) opis=opis.slice(0,70);
-
-    // Smjer (prihod/rashod): ako izvod ima SAMO isplate (naloga u korist=0) ili SAMO
-    // uplate (naloga na teret=0), sve stavke sigurno idu u taj smjer. Inače je zadano
-    // rashod, uz mogućnost ručne izmjene na pregledu. U HTML-u i .wri zapisu smjer se
-    // ne pogađa — ondje su isplata i uplata zasebni stupci.
-    var predznak = -1;
-    var _I = PDF_SALDO_INFO||{};
-    if (_I.nalogaTeret===0 && _I.nalogaKorist>0) predznak = 1;
-    else if (_I.nalogaKorist===0 && _I.nalogaTeret>0) predznak = -1;
-
-    var rr = izvodRedak(dM[1], amtAbs*predznak, opis);
+    var rr = izvodRedak(st.datum, st.iznos*predznak, opis);
     if (rr) PDF_ROWS.push(rr);
   }
   renderPdfPreview();
@@ -4754,10 +4821,11 @@ function parseHtmlIzvod(html, dodaj){
     var iznos = (iznUpl && iznUpl!==0) ? Math.abs(iznUpl) : -Math.abs(iznIsp||0);
     if (!iznos) continue;
 
-    // naziv partnera je prvi redak ćelije (drugi je njegov IBAN),
-    // svrha plaćanja je prvi redak treće ćelije bez rednog broja ("1 - Plaćanje")
-    var naziv=(par[0]||'').replace(/\s+/g,' ').trim();
-    var svrha=(svr[0]||'').replace(/^\d+\s*-\s*/,'').trim();
+    // Ćelije su višeredne: naziv platitelja zna ići u dva reda, a opis plaćanja
+    // u tri. Uzimaju se svi redci osim IBAN-a, referenci i šifre namjene.
+    var naziv=par.filter(function(z){ return !izvodPoljeBezZnacenja(z); }).join(' ').replace(/\s+/g,' ').trim();
+    var svrha=svr.filter(function(z){ return !izvodPoljeBezZnacenja(z); })
+                 .join(' ').replace(/^\d+\s*-\s*/,'').replace(/\s+/g,' ').trim();
     var opis=(naziv+' '+svrha).replace(/\s+/g,' ').trim();
 
     var rr=izvodRedak(dM[1], iznos, opis);
@@ -8070,8 +8138,16 @@ function sbOsvjeziAko(razmakMs){
 // Mora stajati OVDJE, nakon sloja za sinkronizaciju, da se promjena uredno
 // zabilježi za slanje u oblak i da je povlačenje ne pregazi.
 // ═══════════════════════════════════════════
+// Plaća jednog djelatnika stigne na izvod kao pet naloga: neto na tekući račun,
+// porez i prirez, doprinos za zdravstveno, doprinos za MIO I i MIO II stup.
+// Prepoznaju se po svrsi plaćanja, ne po primatelju — "Državni proračun" je
+// primatelj i PDV-a i doprinosa.
 var PN_UGR_PRAVILA = [
   {partner:'1201 pdv',                    kat:'pdv'},
+  {partner:'doprinos',                    kat:'place_mgmt'},
+  {partner:'porez i prirez',              kat:'place_mgmt'},
+  {partner:'regos',                       kat:'place_mgmt'},
+  {partner:'tekući računi po specifikaciji', kat:'place_mgmt'},
   {partner:'pdv obveza',                  kat:'pdv'},
   {partner:'naknad',                      kat:'banka'},
   {partner:'polleo',                      kat:'nabava_proteina'},
@@ -8083,7 +8159,7 @@ var PN_UGR_PRAVILA = [
   {partner:'hrvatska gospodarska komora', kat:'clanarina_hgk'}
 ];
 function pnIspravakPravila(){
-  var FLAG='pn_pravila_ugr_1';
+  var FLAG='pn_pravila_ugr_3';   // podignuto: dodana pravila za plaće i oznaka ugr
   try { if (localStorage.getItem(FLAG)) return; } catch(e){}
   var promjena=false;
   // Naziv banke stoji u zaglavlju svakog izvoda — kao pravilo bi svaki redak
@@ -8094,7 +8170,10 @@ function pnIspravakPravila(){
   }
   PN_UGR_PRAVILA.forEach(function(r){
     var ima=PN_RULES.filter(function(x){ return String(x.partner||'').toLowerCase()===r.partner.toLowerCase(); })[0];
-    if (!ima) { PN_RULES.push({partner:r.partner, kat:r.kat}); promjena=true; }
+    if (!ima) { PN_RULES.push({partner:r.partner, kat:r.kat, ugr:1}); promjena=true; }
+    // Zatečeno pravilo koje je doslovno ugrađeno (isti partner i ista rubrika)
+    // označi se kao ugrađeno, da ga korisnikov kasniji ispravak može nadglasati.
+    else if (!ima.ugr && ima.kat===r.kat) { ima.ugr=1; promjena=true; }
   });
   if (promjena) { savePnRules(); if (typeof pnSyncOznaci==='function') pnSyncOznaci('pn_rules'); }
   try { localStorage.setItem(FLAG,'1'); } catch(e){}
