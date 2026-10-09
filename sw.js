@@ -1,6 +1,6 @@
 /* PERLA NOTTE RDG — service worker
    Aplikacija radi i bez interneta; podaci ostaju u localStorage preglednika. */
-var VERZIJA = 'pn-rdg-v159';
+var VERZIJA = 'pn-rdg-v160';
 
 var JEZGRA = [
   './',

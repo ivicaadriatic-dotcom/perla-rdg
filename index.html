@@ -1206,7 +1206,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v159</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v160</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1338,7 +1338,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v159';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v160';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -8223,6 +8223,53 @@ function pnIspravakRubrika(){
 }
 
 
+// Stavke plaće proknjižene PRIJE nego što su rubrike Plaće postojale sjede
+// ondje gdje ih je zatekao uvoz — najčešće u Ostalim troškovima. Ovo ih
+// premješta na njihovo mjesto, pa se ne moraju unositi ponovno. Ako su već
+// u Plaćama, ne radi ništa.
+function pnIspravakPlace(){
+  var FLAG='pn_place_1';
+  try { if (localStorage.getItem(FLAG)) return null; } catch(e){}
+  if (!TD['place_mgmt']) return null;
+  var pomaknuto=0, iznosUk=0, izvori={}, dirnuto={};
+  for (var k in TD) {
+    if (!Object.prototype.hasOwnProperty.call(TD,k) || !TD[k]) continue;
+    if (k==='place_mgmt' || k==='place_ostali') continue;
+    if (k==='prihodi26' || k==='dnevni') continue;   // prihodi nisu plaća
+    for (var m=0;m<12;m++) {
+      var rows=TD[k][m]||[], ostaju=[];
+      for (var i=0;i<rows.length;i++) {
+        var r=rows[i], o=String((r&&r.tvrtka)||'');
+        // Odluku donosi isto pravilo koje vrijedi i pri uvozu, pa korisnikovo
+        // naučeno pravilo ima prednost i ovdje — ništa se ne premješta mimo njega.
+        var cilj = (parseFloat(r&&r.iznos)>0 && o) ? pravioZaPartnera(o) : null;
+        if (cilj && cilj.indexOf('place_')===0 && TD[cilj]) {
+          if (!TD[cilj][m]) TD[cilj][m]=[];
+          TD[cilj][m].push(r);
+          pomaknuto++; iznosUk+=parseFloat(r.iznos)||0;
+          izvori[k]=1; dirnuto[k]=1; dirnuto[cilj]=1;
+        } else ostaju.push(r);
+      }
+      TD[k][m]=ostaju.length?ostaju:[{datum:'',iznos:0,tvrtka:'',vpl:'',placeno:''}];
+    }
+  }
+  if (pomaknuto) {
+    for (var dk in dirnuto) { if (TAB_TO_P[dk]) { try { syncTDtoP(dk); } catch(e){} } }
+    try {
+      localStorage.setItem('pn_td', JSON.stringify(TD));
+      localStorage.setItem('pn_p', JSON.stringify(P));
+      localStorage.setItem('pn_p_full', JSON.stringify(P));
+    } catch(e){}
+    if (typeof pnSyncOznaci==='function') { pnSyncOznaci('pn_td'); pnSyncOznaci('pn_p'); pnSyncOznaci('pn_p_full'); }
+  }
+  try { localStorage.setItem(FLAG,'1'); } catch(e){}
+  if (!pomaknuto) return null;
+  var imena=Object.keys(izvori).map(function(x){
+    var t=ALL_TABS.filter(function(z){return z.id===x;})[0]; return t?t.lbl:x;
+  });
+  return {broj:pomaknuto, iznos:iznosUk, izvori:imena};
+}
+
 // Obnova redaka izgubljenih pri ranijem preslagivanju rubrika.
 // pn_izvod_potpisi pamti svaki proknjiženi redak izvoda (datum|iznos|opis).
 // Ako takvog iznosa nema nigdje u podacima — ni kao stavka ni kao rata —
@@ -8281,6 +8328,17 @@ function pnJednokratniIspravci(){
   } catch(e){}
   try { pnIspravakPravila(); } catch(e){}
     try { pnIspravakRubrika(); } catch(e){}
+    try {
+      var _pl=pnIspravakPlace();
+      if (_pl && typeof pnAlert==='function') {
+        var _iz=_pl.izvori.length ? ('\n\nDosad su stajale u: '+_pl.izvori.join(', ')+'.') : '';
+        pnAlert(_pl.broj+' '+izvMn(_pl.broj,'stavka','stavke','stavaka')+' ('+fmt2(_pl.iznos)+
+                ' EUR) prepoznato je kao pla\u0107a i premje\u0161teno u rubriku Pla\u0107e \u2013 Management.'+_iz+
+                '\n\nNe treba ih unositi ponovno. Ako djelatnik ne spada u management, prebacite ih u '+
+                'Transakcije \u2192 Pla\u0107e \u2013 Ostali.',
+                {title:'Preslo\u017eene stavke pla\u0107e'});
+      }
+    } catch(e){}
     osvjezi=true;
   }
   // Obnova se provjerava i poslije svakog povlačenja — tako se gubitak retka
