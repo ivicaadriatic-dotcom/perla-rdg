@@ -1206,7 +1206,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v160</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v161</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1338,7 +1338,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v160';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v161';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -1591,6 +1591,41 @@ function tdOsiguraj(td){
   }
   return promjena;
 }
+// Otisak sadržaja retka. Mijenja se čim se bilo što u retku promijeni, pa se
+// po njemu prepoznaje da je redak uređen — bez diranja svakog mjesta u kodu
+// koje redak mijenja (tablica, uvoz izvoda, rate, PDV, mobilni zasloni).
+function tdOtisak(r){
+  if (!r) return '';
+  var u=''; try { u=JSON.stringify(r.uplate||[]); } catch(e){ u=''; }
+  return tdHash([r.datum, r.iznos, r.tvrtka, r.vpl, r.placeno,
+                 (r.izvod?1:0), (r.bezRata?1:0), (r.pdvt||''),
+                 (r.pdvm==null?'':r.pdvm), u].join('\u0001'));
+}
+// Pri svakom spremanju: redak kojem se sadržaj promijenio dobiva vrijeme izmjene.
+// Redak viđen prvi put dobiva vrijeme 0 — "ne zna se kad je nastao". Tako uređaj
+// koji je aplikaciju samo otvorio ne može nadglasati uređaj koji je stvarno nešto
+// promijenio.
+function tdOznaciPromjene(td){
+  if (!td) return;
+  var sad=Date.now();
+  for (var k in td) {
+    if (!Object.prototype.hasOwnProperty.call(td,k) || !td[k]) continue;
+    for (var m=0;m<12;m++) {
+      var rows=td[k][m]||[];
+      for (var i=0;i<rows.length;i++) {
+        var r=rows[i];
+        if (tdPrazanRedak(r)) continue;
+        var o=tdOtisak(r);
+        if (r.fp==null) { r.fp=o; if (r.mt==null) r.mt=0; }
+        else if (r.fp!==o) { r.fp=o; r.mt=sad; }
+      }
+    }
+  }
+}
+function tdNovijiOd(stari, novi){
+  return ((+(novi&&novi.mt)||0) > (+(stari&&stari.mt)||0));
+}
+
 function tdSpoji(lok, obl){
   try { tdOsiguraj(lok); tdOsiguraj(obl); } catch(e){}
   var out={}, k;
@@ -1600,18 +1635,23 @@ function tdSpoji(lok, obl){
   for (k in out) {
     var L=(lok&&lok[k])||[], O=(obl&&obl[k])||[], mjeseci=[];
     for (var m=0;m<12;m++) {
-      var vidjeni={}, spoj=[];
+      var poz={}, spoj=[];
       ((L[m])||[]).forEach(function(r){
         if (tdPrazanRedak(r)) return;
         var id=r.id||('s'+tdKljucRetka(r));
-        if (vidjeni[id]) return;
-        vidjeni[id]=1; spoj.push(r);
+        if (poz[id]!=null) return;
+        poz[id]=spoj.length; spoj.push(r);
       });
       ((O[m])||[]).forEach(function(r){
         if (tdPrazanRedak(r)) return;
         var id=r.id||('s'+tdKljucRetka(r));
-        if (vidjeni[id] || tdJeObrisan(id) || tdJeObrisan(tdKljucRetka(r))) return;
-        vidjeni[id]=1; spoj.push(r);
+        if (tdJeObrisan(id) || tdJeObrisan(tdKljucRetka(r))) return;
+        if (poz[id]==null) { poz[id]=spoj.length; spoj.push(r); return; }
+        // Isti redak postoji na oba uređaja. Ostaje onaj koji je KASNIJE UREĐEN.
+        // Prije je uvijek ostajao lokalni, pa je uređaj sa starijom kopijom vraćao
+        // tuđu izmjenu na staro i još je takvu slao natrag u oblak — izmjena s
+        // računala bi se "sama od sebe" vratila na početno.
+        if (tdNovijiOd(spoj[poz[id]], r)) spoj[poz[id]]=r;
       });
       mjeseci.push(spoj.length?spoj:[{datum:'',iznos:0,tvrtka:'',vpl:'',placeno:''}]);
     }
@@ -1664,6 +1704,7 @@ function getRowVal(k, i) { return (P[k] && P[k][i]) ? parseFloat(P[k][i])||0 : 0
 // ═══════════════════════════════════════════
 function saveAll() {
   try {
+    try { tdOznaciPromjene(TD); } catch(e){}
     localStorage.setItem('pn_td', JSON.stringify(TD));
     localStorage.setItem('pn_rows', JSON.stringify(ROWS));
     // Spremi i custom TAB_TO_P mapiranje za custom rubrike
@@ -2402,7 +2443,11 @@ function renderTrans(id) {
 }
 
 function addRowTD(id) { TD[id][TS[id]].push({datum:'',iznos:0,tvrtka:'',vpl:'',placeno:''}); if (id==='pdv') { renderPDV(); } else { renderTrans(id); } }
-function switchMonth(id,mi) { TS[id]=mi; if (id==='pdv') { renderPDV(); } else { renderTrans(id); } }
+function switchMonth(id,mi) {
+  TS[id]=mi;
+  try { localStorage.setItem('pn_ts', JSON.stringify(TS)); } catch(e){}
+  if (id==='pdv') { renderPDV(); } else { renderTrans(id); }
+}
 function handleSearch(inp, id) {
   var term=inp.value.toLowerCase().trim();
   var tbody=document.getElementById('tbody_'+id);
@@ -8102,9 +8147,13 @@ var SB_ZADNJE_POVL = 0;
 var SB_CEKA_PRIKAZ=null;
 function sbOsvjeziPrikaz(){
   if (SB_CEKA_PRIKAZ) return;
+  var cekao=0;
   var pokusaj=function(){
-    if (!sbZauzet()) { location.reload(); return; }
-    SB_CEKA_PRIKAZ=setTimeout(pokusaj, 3000);   // pricekaj da zavrsi unos
+    // Ne prekidaj korisnika usred unosa. Nakon dvije minute čekanja ipak osvježi,
+    // da zaboravljeno otvoreno polje ne zaustavi usklađivanje zauvijek.
+    if (sbZauzet() && cekao < 120000) { cekao+=3000; SB_CEKA_PRIKAZ=setTimeout(pokusaj, 3000); return; }
+    SB_CEKA_PRIKAZ=null;
+    location.reload();
   };
   SB_CEKA_PRIKAZ=setTimeout(pokusaj, 800);
 }
@@ -8322,8 +8371,11 @@ function pnJednokratniIspravci(){
     PN_ISPRAVCI_GOTOVO=true;
     try {
     if (tdOsiguraj(TD)) {
+      // Oznake se izvode iz sadržaja, pa ih svaki uređaj izračuna isto — ne treba
+      // ih slati u oblak. Prije se time pn_td označavao kao "ima nespremljenu
+      // promjenu" čim se aplikacija otvori, pa se pri svakom pokretanju ulazilo u
+      // spajanje i tuđa je izmjena mogla biti preglašena.
       localStorage.setItem('pn_td', JSON.stringify(TD));
-      if (typeof pnSyncOznaci==='function') pnSyncOznaci('pn_td');
     }
   } catch(e){}
   try { pnIspravakPravila(); } catch(e){}
@@ -8630,6 +8682,9 @@ function switchTab(id) {
   _tabNatrag=false;
   if (id==='dash') TAB_HIST=[];
   activeTab=id;
+  // Zapamti gdje je korisnik stao. Sinkronizacija nakon povlačenja osvježava
+  // stranicu, pa bi ga bez ovoga svaki put vraćalo na nadzornu ploču.
+  try { localStorage.setItem('pn_tab', id); } catch(e){}
   var btns=document.querySelectorAll('.nav-i');
   for (var i=0; i<btns.length; i++) {
     btns[i].classList.toggle('on', btns[i].dataset.id===id);
@@ -8799,6 +8854,23 @@ function renderNav() {
   });
 }
 renderNav();
+// Vrati se na rubriku i mjesec na kojima je korisnik stao. Bez toga ga svako
+// osvježavanje — a sinkronizacija ga radi sama — izbaci na nadzornu ploču.
+(function(){
+  try {
+    var t=localStorage.getItem('pn_ts');
+    if (t) { var o=JSON.parse(t); for (var k in o) if (TS[k]!=null && o[k]>=0 && o[k]<12) TS[k]=o[k]; }
+  } catch(e){}
+  try {
+    var z=localStorage.getItem('pn_tab');
+    if (!z || z==='dash') return;
+    var postoji = ALL_TABS.some(function(x){ return x.id===z; }) ||
+                  (typeof NAV!=='undefined' && NAV.some(function(x){ return x.id===z; }));
+    if (!postoji) return;
+    _tabNatrag=true;          // povratak na isto mjesto nije korak unaprijed
+    switchTab(z);
+  } catch(e){}
+})();
 // Aparati: postavi prikaz (odabrani aparat ili zbirno) i osvježi oznaku u zaglavlju
 try { apPrimijeni(false); apOznakaOsvjezi(); saveDailyAndSync(); } catch(e) { console.error('aparati init', e); }
 
