@@ -1206,7 +1206,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v161</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v163</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1338,7 +1338,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v161';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v163';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -4586,22 +4586,40 @@ function savePnRules() { try { localStorage.setItem('pn_rules', JSON.stringify(P
 // ali se prije nije tako ponašalo: tražilo se redom kojim su zapisana, pa je
 // ugrađeno pravilo dodano pri pokretanju pobjeđivalo ispravak koji je korisnik
 // napravio kasnije. Sada se u dva prolaza: prvo naučena, pa ugrađena.
+// Vodeća interpunkcija se zanemaruje. Pravilo naučeno iz opisa koji je
+// počinjao točkom (". ADRIA PAYMENT") inače se nikad ne bi poklopilo ni s čim.
+function pnPraviloTekst(p){
+  return String(p||'').toLowerCase().replace(/^[\s.,:;\-_*#\/\\|()\[\]]+/,'').trim();
+}
+// Koliko slova ima — naziv partnera mora ih imati barem tri. Datum ili broj
+// računa nije partner i ne smije postati pravilo.
+function pnBrojSlova(t){
+  return (String(t||'').match(/[A-Za-z\u010c\u0106\u017d\u0160\u0110\u010d\u0107\u017e\u0161\u0111]/g)||[]).length;
+}
 function pravioZaPartnera(opis) {
-  var o=(opis||'').toLowerCase(), i;
+  var o=(opis||'').toLowerCase(), i, p;
   for (i=0;i<PN_RULES.length;i++) {
     if (PN_RULES[i].ugr) continue;
-    if (o.indexOf(String(PN_RULES[i].partner||'').toLowerCase())>=0) return PN_RULES[i].kat;
+    p=pnPraviloTekst(PN_RULES[i].partner);
+    if (p && o.indexOf(p)>=0) return PN_RULES[i].kat;
   }
   for (i=0;i<PN_RULES.length;i++) {
     if (!PN_RULES[i].ugr) continue;
-    if (o.indexOf(String(PN_RULES[i].partner||'').toLowerCase())>=0) return PN_RULES[i].kat;
+    p=pnPraviloTekst(PN_RULES[i].partner);
+    if (p && o.indexOf(p)>=0) return PN_RULES[i].kat;
   }
   return null;
 }
 function zapamtiPravilo(opis, kat) {
   if (!opis || !kat) return;
-  var partner = opis.split(/\s{2,}/)[0].split(' ').slice(0,3).join(' ').trim();
+  // Interpunkcija se miče PRIJE uzimanja prve tri riječi — inače vodeća točka
+  // potroši jedno od ta tri mjesta i naziv ispadne kraći nego što treba.
+  var cist = String(opis).replace(/^[\s.,:;\-_*#\/\\|()\[\]]+/,'');
+  var partner = cist.split(/\s{2,}/)[0].split(' ').slice(0,3).join(' ').trim();
   if (!partner) return;
+  // Iz datuma ("02. 11. 2026.") ili broja računa ne nastaje pravilo — takvo bi
+  // pravilo kasnije svrstalo bilo koji redak koji taj niz slučajno sadrži.
+  if (pnBrojSlova(partner) < 3) return;
   var existing = PN_RULES.filter(function(r){ return String(r.partner||'').toLowerCase()===partner.toLowerCase(); })[0];
   // Korisnikov ispravak više nije ugrađeno pravilo — dobiva prednost.
   if (existing) { existing.kat = kat; delete existing.ugr; }
@@ -4939,6 +4957,183 @@ function parseWriIzvod(text, dodaj){
 
 // ── učitavanje datoteka ────────────────────────────────────────────
 // Bajtovi u tekst. .wri je u windows-1250, PDF-ov i HTML-ov tekst u UTF-8.
+// ═══════════════════════════════════════════
+// XML — e-Račun (UBL 2.1 i CII) i bankovni izvod (camt.053)
+// XML je od sva tri oblika najtočniji: polja su imenovana, pa se ništa ne
+// pogađa iz izgleda stranice. Svi se čitaju bez obzira na prostor imena
+// (cbc:, cac:, ram:, ns2: …) — gleda se samo naziv elementa.
+// ═══════════════════════════════════════════
+function xmlDok(t){
+  t=String(t||'').replace(/^\uFEFF/,'');
+  if (!/^\s*<\?xml|^\s*</.test(t)) return null;
+  try {
+    var d=new DOMParser().parseFromString(t,'application/xml');
+    if (!d || !d.documentElement) return null;
+    if (d.getElementsByTagName('parsererror').length) return null;
+    return d;
+  } catch(e){ return null; }
+}
+function xmlNaziv(el){
+  if (!el) return '';
+  return String(el.localName || el.nodeName || '').replace(/^.*:/,'');
+}
+function xmlSvi(k, ime){
+  if (!k) return [];
+  var l=[];
+  try { l=k.getElementsByTagNameNS('*', ime); } catch(e){ l=k.getElementsByTagName(ime); }
+  return Array.prototype.slice.call(l);
+}
+function xmlPrvi(k, ime){ return xmlSvi(k, ime)[0] || null; }
+function xmlTekst(k, ime){
+  var e=xmlPrvi(k, ime);
+  return e ? String(e.textContent||'').replace(/\s+/g,' ').trim() : '';
+}
+// Izravno dijete — nužno jer se isti naziv (ID, Amt, Name) pojavljuje i dublje
+// u dokumentu, npr. u stavkama računa ili u podacima o strankama.
+function xmlDijete(k, ime){
+  if (!k || !k.childNodes) return null;
+  for (var i=0;i<k.childNodes.length;i++) {
+    var c=k.childNodes[i];
+    if (c.nodeType===1 && xmlNaziv(c)===ime) return c;
+  }
+  return null;
+}
+function xmlDTekst(k, ime){
+  var e=xmlDijete(k, ime);
+  return e ? String(e.textContent||'').replace(/\s+/g,' ').trim() : '';
+}
+function xmlBroj(t){
+  var n=parseFloat(String(t||'').replace(/\s/g,'').replace(/\u00a0/g,'').replace(',','.'));
+  return isFinite(n) ? n : 0;
+}
+// 2026-10-05 / 20261005 / 2026-10-05T12:00:00 → 05.10.2026
+function xmlDatum(t){
+  t=String(t||'').trim(); if (!t) return '';
+  var m=t.match(/(\d{4})-(\d{2})-(\d{2})/);        if (m) return m[3]+'.'+m[2]+'.'+m[1];
+  var m2=t.match(/^(\d{4})(\d{2})(\d{2})/);         if (m2) return m2[3]+'.'+m2[2]+'.'+m2[1];
+  var m3=t.match(/(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})/);
+  if (m3) return ('0'+m3[1]).slice(-2)+'.'+('0'+m3[2]).slice(-2)+'.'+m3[3];
+  return '';
+}
+function xmlVrsta(d){
+  if (!d || !d.documentElement) return '';
+  var k=xmlNaziv(d.documentElement);
+  if (k==='Invoice') return 'ubl';
+  if (k==='CreditNote') return 'ubl';
+  if (k==='CrossIndustryInvoice') return 'cii';
+  if (xmlPrvi(d,'BkToCstmrStmt')) return 'camt';
+  if (xmlPrvi(d,'Invoice') || xmlPrvi(d,'CreditNote')) return 'ubl';
+  if (xmlPrvi(d,'CrossIndustryInvoice')) return 'cii';
+  return '';
+}
+function xmlCistOib(t){ return String(t||'').replace(/^HR/i,'').replace(/\D/g,''); }
+
+// ── UBL 2.1 stranka ──
+function xmlUblStranka(p){
+  if (!p) return {naziv:'', oib:''};
+  var le=xmlPrvi(p,'PartyLegalEntity');
+  var naziv=(le?xmlDTekst(le,'RegistrationName'):'') ||
+            xmlTekst(xmlPrvi(p,'PartyName'),'Name') ||
+            xmlTekst(p,'RegistrationName') || '';
+  var oib='', pts=xmlSvi(p,'PartyTaxScheme');
+  for (var i=0;i<pts.length && !oib;i++) oib=xmlDTekst(pts[i],'CompanyID');
+  if (!oib && le) oib=xmlDTekst(le,'CompanyID');
+  if (!oib) oib=xmlTekst(xmlPrvi(p,'PartyIdentification'),'ID');
+  return {naziv:String(naziv).slice(0,60), oib:xmlCistOib(oib)};
+}
+function xmlUblRacun(d){
+  var k=d.documentElement;
+  if (xmlNaziv(k)!=='Invoice' && xmlNaziv(k)!=='CreditNote') {
+    k = xmlPrvi(d,'Invoice') || xmlPrvi(d,'CreditNote') || k;
+  }
+  var r={broj:xmlDTekst(k,'ID'), datum:xmlDatum(xmlDTekst(k,'IssueDate')),
+         rok:xmlDatum(xmlDTekst(k,'DueDate')), odobrenje:(xmlNaziv(k)==='CreditNote')};
+  if (!r.rok) r.rok=xmlDatum(xmlTekst(xmlPrvi(k,'PaymentMeans'),'PaymentDueDate'));
+  var lmt=xmlPrvi(k,'LegalMonetaryTotal') || xmlPrvi(k,'RequestedMonetaryTotal');
+  r.iznos=xmlBroj(xmlDTekst(lmt,'PayableAmount')) || xmlBroj(xmlDTekst(lmt,'TaxInclusiveAmount'));
+  r.neto =xmlBroj(xmlDTekst(lmt,'TaxExclusiveAmount'));
+  r.pdv  =xmlBroj(xmlDTekst(xmlPrvi(k,'TaxTotal'),'TaxAmount'));
+  r.prodavatelj=xmlUblStranka(xmlPrvi(xmlPrvi(k,'AccountingSupplierParty'),'Party'));
+  r.kupac      =xmlUblStranka(xmlPrvi(xmlPrvi(k,'AccountingCustomerParty'),'Party'));
+  return r;
+}
+
+// ── CII (UN/CEFACT) ──
+function xmlCiiStranka(p){
+  if (!p) return {naziv:'', oib:''};
+  var oib='', tr=xmlSvi(p,'SpecifiedTaxRegistration');
+  for (var i=0;i<tr.length && !oib;i++) oib=xmlTekst(tr[i],'ID');
+  return {naziv:String(xmlDTekst(p,'Name')).slice(0,60), oib:xmlCistOib(oib)};
+}
+function xmlCiiRacun(d){
+  var k=d.documentElement;
+  var ed=xmlPrvi(k,'ExchangedDocument');
+  var r={broj:xmlDTekst(ed,'ID'),
+         datum:xmlDatum(xmlTekst(xmlPrvi(ed,'IssueDateTime'),'DateTimeString')), odobrenje:false};
+  r.rok=xmlDatum(xmlTekst(xmlPrvi(xmlPrvi(k,'SpecifiedTradePaymentTerms'),'DueDateDateTime'),'DateTimeString'));
+  var sum=xmlPrvi(k,'SpecifiedTradeSettlementHeaderMonetarySummation');
+  r.iznos=xmlBroj(xmlDTekst(sum,'GrandTotalAmount')) || xmlBroj(xmlDTekst(sum,'DuePayableAmount'));
+  r.neto =xmlBroj(xmlDTekst(sum,'TaxBasisTotalAmount'));
+  r.pdv  =xmlBroj(xmlDTekst(sum,'TaxTotalAmount'));
+  r.prodavatelj=xmlCiiStranka(xmlPrvi(k,'SellerTradeParty'));
+  r.kupac      =xmlCiiStranka(xmlPrvi(k,'BuyerTradeParty'));
+  return r;
+}
+// Jedinstven ulaz: iz XML dokumenta pročitaj račun, bez obzira na oblik.
+function xmlRacun(d){
+  var v=xmlVrsta(d);
+  if (v==='ubl') return xmlUblRacun(d);
+  if (v==='cii') return xmlCiiRacun(d);
+  return null;
+}
+function pnNasOib(){
+  try { return xmlCistOib((typeof SETTINGS!=='undefined' && SETTINGS) ? SETTINGS.oib : ''); } catch(e){ return ''; }
+}
+
+// ── camt.053 — bankovni izvod ──
+function xmlCamt(d){
+  var out={pocetno:null, zavrsno:null, stavke:[], dug:0, pot:0};
+  var stmts=xmlSvi(d,'Stmt'); if (!stmts.length) stmts=[d.documentElement];
+  stmts.forEach(function(st){
+    xmlSvi(st,'Bal').forEach(function(b){
+      var kod=xmlTekst(xmlPrvi(b,'Tp'),'Cd'), izn=xmlBroj(xmlDTekst(b,'Amt'));
+      if (/OPBD|PRCD/i.test(kod) && out.pocetno==null) out.pocetno=izvFmt(izn);
+      if (/CLBD|CLAV/i.test(kod)) out.zavrsno=izvFmt(izn);
+    });
+    xmlSvi(st,'Ntry').forEach(function(n){
+      var izn=xmlBroj(xmlDTekst(n,'Amt')); if (!(Math.abs(izn)>0)) return;
+      var smjer=(xmlDTekst(n,'CdtDbtInd') || xmlTekst(n,'CdtDbtInd') || 'DBIT').toUpperCase();
+      var ulaz=(smjer.indexOf('CRDT')>=0);
+      var dat=xmlDatum(xmlTekst(xmlPrvi(n,'BookgDt'),'Dt')) ||
+              xmlDatum(xmlTekst(xmlPrvi(n,'ValDt'),'Dt'));
+      if (!dat) return;
+      // Druga strana: kod odljeva primatelj, kod priljeva platitelj.
+      var strana=ulaz ? (xmlPrvi(n,'Dbtr')||xmlPrvi(n,'InitgPty')) : (xmlPrvi(n,'Cdtr')||xmlPrvi(n,'CdtrAcct'));
+      var naziv=strana ? xmlTekst(strana,'Nm') : '';
+      var svrha=xmlTekst(n,'Ustrd') || xmlDTekst(n,'AddtlNtryInf') || xmlTekst(n,'AddtlTxInf') || '';
+      var opis=(naziv+' '+svrha).replace(/\s+/g,' ').trim();
+      if (!opis) opis='(bez opisa)';
+      if (ulaz) out.pot+=Math.abs(izn); else out.dug+=Math.abs(izn);
+      out.stavke.push({datum:dat, iznos:(ulaz?1:-1)*Math.abs(izn), opis:opis});
+    });
+  });
+  return out;
+}
+function parseXmlIzvod(d, dodaj){
+  izvodPocni(dodaj);
+  var c=xmlCamt(d);
+  var brTeret=0, brKorist=0;
+  c.stavke.forEach(function(x){ if (x.iznos<0) brTeret++; else brKorist++; });
+  izvodDodajSaldo({pocetno:c.pocetno, zavrsno:c.zavrsno,
+                   nalogaTeret:brTeret, nalogaKorist:brKorist,
+                   dugovni:izvFmt(c.dug), potrazni:izvFmt(c.pot)});
+  c.stavke.forEach(function(x){
+    var rr=izvodRedak(x.datum, x.iznos, x.opis);
+    if (rr) PDF_ROWS.push(rr);
+  });
+  renderPdfPreview();
+}
+
 function izvodTekstIzBajtova(buf){
   var u=new Uint8Array(buf);
   var dek=function(kod){ try { return new TextDecoder(kod).decode(u); } catch(e){ return null; } };
@@ -4968,7 +5163,7 @@ function izvodIzPdf(bytes, gotovo, greska){
 }
 function izvodUcitajDatoteku(fl, gotovo, greska){
   var ime=String(fl.name||'').toLowerCase();
-  if (/\.(xlsx|xls)$/.test(ime)) { greska('tablice se ne uvoze kao izvod — koristite PDF, HTML ili .wri'); return; }
+  if (/\.(xlsx|xls)$/.test(ime)) { greska('tablice se ne uvoze kao izvod — koristite XML, PDF, HTML ili .wri'); return; }
   var r=new FileReader();
   r.onerror=function(){ greska('datoteka se ne može pročitati'); };
   if (/\.pdf$/.test(ime) || fl.type==='application/pdf') {
@@ -4978,7 +5173,10 @@ function izvodUcitajDatoteku(fl, gotovo, greska){
   r.onload=function(e){
     var txt=izvodTekstIzBajtova(e.target.result);
     try {
-      if (/<\s*(html|table|tr)\b/i.test(txt)) parseHtmlIzvod(txt, true);
+      var xd=xmlDok(txt), xv=xd?xmlVrsta(xd):'';
+      if (xv==='camt') parseXmlIzvod(xd, true);
+      else if (xv==='ubl' || xv==='cii') { greska('ovo je e-ra\u010dun, ne izvod — u\u010ditajte ga u Ulazne ili Izlazne ra\u010dune'); return; }
+      else if (/<\s*(html|table|tr)\b/i.test(txt)) parseHtmlIzvod(txt, true);
       else if (izvodJeWri(txt)) parseWriIzvod(txt, true);
       else parsePdfIzvod(txt, true);
       gotovo();
@@ -7219,21 +7417,75 @@ function excelParseVendingReport(rows) {
 // ── UVOZ ULAZNIH RAČUNA (pojedinačni PDF racun: OIB, broj racuna, datum, rok, iznos) ──
 var UL_RACUNI = [];
 
-function unosUlazniRacunPdf(inputEl) {
-  var files = inputEl.files; if (!files || !files.length) return;
-  var status = document.getElementById('ulRacStatus');
-  if (status) status.textContent = 'U\u010ditavanje '+files.length+' datoteka(a)\u2026';
-  var promises = [];
-  for (var i=0;i<files.length;i++) {
-    promises.push(citajPdfTekst(files[i]));
+// Račun iz XML-a u redak pregleda. Smjer određuje naš OIB iz Postavki:
+// ako smo mi prodavatelj, to je izlazni račun i ovdje mu nije mjesto.
+function ulazniIzXml(r, ime, lose){
+  var nas=pnNasOib();
+  if (nas && r.prodavatelj && r.prodavatelj.oib===nas) {
+    lose.push('\u2022 '+ime+' \u2014 ovo je VA\u0160 ra\u010dun (vi ste izdavatelj); u\u010ditajte ga u Izlazne ra\u010dune');
+    return false;
   }
-  Promise.all(promises).then(function(tekstovi){
-    tekstovi.forEach(function(txt){ if (txt) parseUlazniRacunPdf(txt); });
-    if (status) status.textContent = '\u2713 U\u010ditano '+tekstovi.length+' ra\u010duna';
-    renderUlRacPreview();
-  }).catch(function(err){
-    if (status) status.textContent = '\u26a0 Gre\u0161ka: '+err.message;
+  var naziv=(r.prodavatelj&&r.prodavatelj.naziv) || '';
+  if (!naziv && !r.iznos) { lose.push('\u2022 '+ime+' \u2014 u XML-u nema ni dobavlja\u010da ni iznosa'); return false; }
+  var naucenaKat=pravioZaPartnera(naziv);
+  var ponCilj=pnPonudaZaRacun(naziv, r.iznos);
+  UL_RACUNI.push({
+    dobavljac: naziv || '(nepoznat dobavlja\u010d)',
+    oib: (r.prodavatelj&&r.prodavatelj.oib)||'', broj: r.broj || '\u2014',
+    ponuda:false, brojPonude:'',
+    datum: r.datum, rok: r.rok || r.datum,
+    iznos: r.odobrenje ? -Math.abs(r.iznos) : Math.abs(r.iznos),
+    kat: naucenaKat || 'razno', naucenaKat: !!naucenaKat,
+    ponudaCilj: ponCilj ? {kat:ponCilj.kat, mo:ponCilj.mo, ri:ponCilj.ri} : null,
+    dopuniPonudu: !!ponCilj, ukljuci:true, izXml:true
   });
+  return true;
+}
+function unosUlazniRacunPdf(inputEl) {
+  var files = inputEl.files ? Array.prototype.slice.call(inputEl.files) : [];
+  if (!files.length) return;
+  var status = document.getElementById('ulRacStatus');
+  if (status) status.textContent = 'U\u010ditavanje '+files.length+' '+izvMn(files.length,'datoteke','datoteke','datoteka')+'\u2026';
+  var i=0, ok=0, lose=[];
+  var zavrsi=function(){
+    if (status) status.textContent = ok
+      ? ('\u2713 U\u010ditano '+ok+' '+izvMn(ok,'ra\u010dun','ra\u010duna','ra\u010duna'))
+      : '\u26a0 Nijedan ra\u010dun nije pro\u010ditan';
+    renderUlRacPreview();
+    try { inputEl.value=''; } catch(e){}
+    if (lose.length && typeof pnAlert==='function') pnAlert('Nije pro\u010ditano:\n\n'+lose.join('\n'), {title:'Ulazni ra\u010duni'});
+  };
+  var sljedeca=function(){
+    if (i>=files.length) { zavrsi(); return; }
+    var fl=files[i++], ime=String(fl.name||'');
+    var jeXml=/\.xml$/i.test(ime) || /xml/i.test(fl.type||'');
+    if (jeXml) {
+      var r=new FileReader();
+      r.onerror=function(){ lose.push('\u2022 '+ime+' \u2014 datoteka se ne mo\u017ee pro\u010ditati'); sljedeca(); };
+      r.onload=function(e){
+        try {
+          var d=xmlDok(izvodTekstIzBajtova(e.target.result));
+          var rac=d?xmlRacun(d):null;
+          if (!rac) lose.push('\u2022 '+ime+' \u2014 nije prepoznat e-ra\u010dun (o\u010dekujem UBL 2.1 ili CII)');
+          else if (ulazniIzXml(rac, ime, lose)) ok++;
+        } catch(err){ lose.push('\u2022 '+ime+' \u2014 '+(err.message||'gre\u0161ka pri \u010ditanju')); }
+        sljedeca();
+      };
+      r.readAsArrayBuffer(fl);
+      return;
+    }
+    citajPdfTekst(fl).then(function(txt){
+      var prije=UL_RACUNI.length;
+      if (txt) { try { parseUlazniRacunPdf(txt); } catch(err){} }
+      if (UL_RACUNI.length>prije) ok++;
+      else lose.push('\u2022 '+ime+' \u2014 iz PDF-a nisu pro\u010ditani ni datum ni iznos');
+      sljedeca();
+    }).catch(function(err){
+      lose.push('\u2022 '+ime+' \u2014 '+(err&&err.message?err.message:'PDF se ne mo\u017ee otvoriti'));
+      sljedeca();
+    });
+  };
+  sljedeca();
 }
 
 function citajPdfTekst(file) {
@@ -7436,28 +7688,84 @@ var IZ_HEADER_MAP = {
   placeno: ['datum pla\u0107anja','pla\u0107eno','napla\u0107eno','datum naplate']
 };
 
-function parseIzlazniOdabirDatoteke(inputEl) {
-  var file = inputEl.files[0]; if (!file) return;
-  var status = document.getElementById('izRacStatus');
-  var ext = file.name.split('.').pop().toLowerCase();
-  if (ext==='pdf') {
-    citajPdfTekst(file).then(function(txt){
-      parseIzlazniTablicu(txt);
-      if (status) status.textContent='\u2713 U\u010ditano iz PDF-a';
-    }).catch(function(err){ if(status) status.textContent='\u26a0 Gre\u0161ka: '+err.message; });
-  } else {
-    var reader = new FileReader();
-    reader.onload = function(e){
-      try {
-        var wb = XLSX.read(e.target.result, {type:'array'});
-        var ws = wb.Sheets[wb.SheetNames[0]];
-        var rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:''});
-        parseIzlazniRedovi(rows);
-        if (status) status.textContent='\u2713 U\u010ditano iz '+ext.toUpperCase()+'-a';
-      } catch(err) { if(status) status.textContent='\u26a0 Gre\u0161ka: '+err.message; }
-    };
-    reader.readAsArrayBuffer(file);
+// Izlazni račun iz XML-a. Ovdje smo MI prodavatelj; ako nismo, datoteka je
+// ulazni račun i to se kaže, ne prešuti.
+function izlazniIzXml(r, ime, lose){
+  var nas=pnNasOib();
+  if (nas && r.kupac && r.kupac.oib===nas && r.prodavatelj && r.prodavatelj.oib!==nas) {
+    lose.push('\u2022 '+ime+' \u2014 ovo je ra\u010dun DOBAVLJA\u010cA; u\u010ditajte ga u Ulazne ra\u010dune');
+    return false;
   }
+  var kupac=(r.kupac&&r.kupac.naziv) || '';
+  if (!r.datum && !r.iznos) { lose.push('\u2022 '+ime+' \u2014 u XML-u nema ni datuma ni iznosa'); return false; }
+  var kratki=String(r.datum||'').split('.').slice(0,2).join('.')+'.';
+  var valuta=r.rok ? (String(r.rok).split('.').slice(0,2).join('.')+'.') : '';
+  var izn=Math.abs(r.iznos) * (r.odobrenje ? -1 : 1);
+  var dupl=pdvIzvodProvjeriDuplikat(kratki, Math.abs(izn), kupac);
+  IZ_RACUNI.push({datum:kratki, iznos:izn, broj:r.broj||'', kupac:kupac||'(bez partnera)',
+                  valuta:valuta, placeno:'', ukljuci:!dupl, dupliciran:dupl, izXml:true});
+  return true;
+}
+function parseIzlazniOdabirDatoteke(inputEl) {
+  var files = inputEl.files ? Array.prototype.slice.call(inputEl.files) : [];
+  if (!files.length) return;
+  var status = document.getElementById('izRacStatus');
+  if (status) status.textContent='U\u010ditavanje\u2026';
+  var i=0, ok=0, lose=[];
+  var zavrsi=function(){
+    if (status) status.textContent = ok
+      ? ('\u2713 U\u010ditano '+ok+' '+izvMn(ok,'ra\u010dun','ra\u010duna','ra\u010duna'))
+      : '\u26a0 Ni\u0161ta nije pro\u010ditano';
+    renderIzRacPreview();
+    try { inputEl.value=''; } catch(e){}
+    if (lose.length && typeof pnAlert==='function') pnAlert('Nije pro\u010ditano:\n\n'+lose.join('\n'), {title:'Izlazni ra\u010duni'});
+  };
+  var sljedeca=function(){
+    if (i>=files.length) { zavrsi(); return; }
+    var fl=files[i++], ime=String(fl.name||''), ext=(ime.split('.').pop()||'').toLowerCase();
+    var prije=IZ_RACUNI.length;
+    if (ext==='xml') {
+      var rx=new FileReader();
+      rx.onerror=function(){ lose.push('\u2022 '+ime+' \u2014 datoteka se ne mo\u017ee pro\u010ditati'); sljedeca(); };
+      rx.onload=function(e){
+        try {
+          var d=xmlDok(izvodTekstIzBajtova(e.target.result));
+          var rac=d?xmlRacun(d):null;
+          if (!rac) lose.push('\u2022 '+ime+' \u2014 nije prepoznat e-ra\u010dun (o\u010dekujem UBL 2.1 ili CII)');
+          else if (izlazniIzXml(rac, ime, lose)) ok++;
+        } catch(err){ lose.push('\u2022 '+ime+' \u2014 '+(err.message||'gre\u0161ka pri \u010ditanju')); }
+        sljedeca();
+      };
+      rx.readAsArrayBuffer(fl);
+      return;
+    }
+    if (ext==='pdf') {
+      citajPdfTekst(fl).then(function(txt){
+        try { parseIzlazniTablicu(txt); } catch(err){}
+        if (IZ_RACUNI.length>prije) ok+=(IZ_RACUNI.length-prije);
+        else lose.push('\u2022 '+ime+' \u2014 iz PDF-a nije pro\u010ditan nijedan redak');
+        sljedeca();
+      }).catch(function(err){
+        lose.push('\u2022 '+ime+' \u2014 '+(err&&err.message?err.message:'PDF se ne mo\u017ee otvoriti'));
+        sljedeca();
+      });
+      return;
+    }
+    var rt=new FileReader();
+    rt.onerror=function(){ lose.push('\u2022 '+ime+' \u2014 datoteka se ne mo\u017ee pro\u010ditati'); sljedeca(); };
+    rt.onload=function(e){
+      try {
+        var wb=XLSX.read(e.target.result,{type:'array'});
+        var ws=wb.Sheets[wb.SheetNames[0]];
+        parseIzlazniRedovi(XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''}));
+        if (IZ_RACUNI.length>prije) ok+=(IZ_RACUNI.length-prije);
+        else lose.push('\u2022 '+ime+' \u2014 u tablici nije prepoznat nijedan redak');
+      } catch(err){ lose.push('\u2022 '+ime+' \u2014 '+(err.message||'tablica se ne mo\u017ee pro\u010ditati')); }
+      sljedeca();
+    };
+    rt.readAsArrayBuffer(fl);
+  };
+  sljedeca();
 }
 
 function nadjiStupac(headerRow, kljucevi) {
@@ -8272,6 +8580,28 @@ function pnIspravakRubrika(){
 }
 
 
+// Zatečena pravila: popravi ona s vodećom interpunkcijom, izbaci ona koja
+// nisu naziv partnera nego datum ili broj. Nastala su iz uvoza ulaznih računa,
+// gdje se dobavljač čita kao prvi redak PDF-a — a to zna biti datum zaglavlja.
+function pnOcistiPravila(){
+  var FLAG='pn_pravila_ocisti_1';
+  try { if (localStorage.getItem(FLAG)) return null; } catch(e){}
+  var izbaceno=[], promjena=false, vidjeni={};
+  for (var i=PN_RULES.length-1;i>=0;i--) {
+    var r=PN_RULES[i], izv=String(r.partner||'');
+    var cist=izv.replace(/^[\s.,:;\-_*#\/\\|()\[\]]+/,'').trim();
+    if (pnBrojSlova(cist) < 3) { izbaceno.push(izv); PN_RULES.splice(i,1); promjena=true; continue; }
+    if (cist!==izv) { r.partner=cist; promjena=true; }
+  }
+  for (var j=PN_RULES.length-1;j>=0;j--) {
+    var k=pnPraviloTekst(PN_RULES[j].partner)+'|'+PN_RULES[j].kat;
+    if (vidjeni[k]) { PN_RULES.splice(j,1); promjena=true; } else vidjeni[k]=1;
+  }
+  if (promjena) { try { savePnRules(); } catch(e){} }
+  try { localStorage.setItem(FLAG,'1'); } catch(e){}
+  return izbaceno.length ? izbaceno.reverse() : null;
+}
+
 // Stavke plaće proknjižene PRIJE nego što su rubrike Plaće postojale sjede
 // ondje gdje ih je zatekao uvoz — najčešće u Ostalim troškovima. Ovo ih
 // premješta na njihovo mjesto, pa se ne moraju unositi ponovno. Ako su već
@@ -8380,6 +8710,16 @@ function pnJednokratniIspravci(){
   } catch(e){}
   try { pnIspravakPravila(); } catch(e){}
     try { pnIspravakRubrika(); } catch(e){}
+    try {
+      var _oc=pnOcistiPravila();
+      if (_oc && typeof pnAlert==='function') {
+        pnAlert('Iz knjigovodstvenih pravila '+izvMn(_oc.length,'izba\u010deno je','izba\u010dena su','izba\u010deno je')+' '+_oc.length+' '+
+                izvMn(_oc.length,'pravilo','pravila','pravila')+' koje nije naziv partnera nego datum:\n\n'+
+                _oc.map(function(x){ return '\u2022 '+x; }).join('\n')+
+                '\n\nTakvo pravilo svrstalo bi svaki redak koji taj datum sadr\u017ei. Ostala pravila su netaknuta.',
+                {title:'O\u010di\u0161\u0107ena pravila knji\u017eenja'});
+      }
+    } catch(e){}
     try {
       var _pl=pnIspravakPlace();
       if (_pl && typeof pnAlert==='function') {
@@ -9268,7 +9608,7 @@ function renderUvoz() {
   h+='<div class="ap-grid uvozGrid">';
 
   h+='<div class="ap-card">'+apHead('bank','#007aff','Bankovni izvod','Stavke se same raspore\u0111uju po knjigovodstvenim kategorijama');
-  h+=apDrop('pdfInput','up','#007aff','Povucite izvod ovdje','Mo\u017eete odabrati i vi\u0161e dnevnih izvadaka odjednom<br>PDF \u00b7 HTML \u00b7 WRI \u00b7 TXT / CSV','.pdf,.html,.htm,.wri,.txt,.csv,application/pdf,text/html,text/plain',true,'handleIzvodUpload(this)');
+  h+=apDrop('pdfInput','up','#007aff','Povucite izvod ovdje','Mo\u017eete odabrati i vi\u0161e dnevnih izvadaka odjednom<br>XML (camt.053) \u00b7 PDF \u00b7 HTML \u00b7 WRI \u00b7 TXT / CSV','.xml,.pdf,.html,.htm,.wri,.txt,.csv,text/xml,application/xml,application/pdf,text/html,text/plain',true,'handleIzvodUpload(this)');
   h+='<div id="pdfDropZone" style="display:none"></div>';
   h+=apPaste('pdfPasteText','Ili zalijepite tekst izvoda','Otvorite PDF, ozna\u010dite tablicu transakcija (Ctrl+A), kopirajte (Ctrl+C) i zalijepite ovdje\u2026','Lijepljenje teksta radi i bez internetske veze. Od tri oblika koja banka \u0161alje najto\u010dniji je HTML, pa .wri \u2014 u njima su stupci ve\u0107 razdvojeni.');
   h+='<div class="ap-actions"><button class="ap-btn pri" onclick="pdfAnalizirajZalijepljeno()">'+apSvg('bolt',15,2.2)+'<span>Analiziraj tekst</span></button><span id="pdfStatus" class="ap-status"></span></div>';
@@ -9327,9 +9667,9 @@ function renderUlazni() {
   var h='<div class="sec-title">Ulazni ra\u010duni</div>';
   h+='<div class="ap-grid uvozGrid">';
   h+='<div class="ap-card">'+apHead('doc','#ff9500','Uvoz ra\u010duna dobavlja\u010da','Knji\u017ee se na datum ra\u010duna s rokom pla\u0107anja');
-  h+=apDrop('ulRacInput','doc','#ff9500','Povucite ra\u010dune ovdje','Mo\u017eete odabrati vi\u0161e PDF-ova odjednom \u2014 svaki je jedan ra\u010dun','application/pdf',true,'unosUlazniRacunPdf(this)');
+  h+=apDrop('ulRacInput','doc','#ff9500','Povucite ra\u010dune ovdje','Mo\u017eete odabrati vi\u0161e datoteka odjednom \u2014 svaka je jedan ra\u010dun<br>XML (e-Ra\u010dun) \u00b7 PDF','.xml,.pdf,text/xml,application/xml,application/pdf',true,'unosUlazniRacunPdf(this)');
   h+='<div id="ulRacStatus" class="ap-status" style="margin-top:10px"></div>';
-  h+=apInfo('Kako radi','Iz ra\u010duna se \u010ditaju dobavlja\u010d (po OIB-u), broj ra\u010duna, datum, rok pla\u0107anja i iznos s PDV-om. Kategoriju prvi put ispravite, a aplikacija je zapamti. Ra\u010dun \u010deka u Dospije\u0107ima dok uvoz izvoda ne prona\u0111e pla\u0107anje.');
+  h+=apInfo('Kako radi','Najto\u010dniji je <b>XML (e-Ra\u010dun)</b> \u2014 ondje su polja imenovana, pa se ni\u0161ta ne poga\u0111a. Iz ra\u010duna se \u010ditaju dobavlja\u010d (po OIB-u), broj ra\u010duna, datum, rok pla\u0107anja i iznos s PDV-om. Kategoriju prvi put ispravite, a aplikacija je zapamti. Ra\u010dun \u010deka u Dospije\u0107ima dok uvoz izvoda ne prona\u0111e pla\u0107anje.');
   h+='</div>';
   h+='<div class="ap-card">'+renderUlazniOtvoreniListHtml()+'</div>';
   h+='</div>';
@@ -9369,7 +9709,7 @@ function renderIzlazni() {
   var h='<div class="sec-title">Izlazni ra\u010duni</div>';
   h+='<div class="ap-grid uvozGrid">';
   h+='<div class="ap-card">'+apHead('send','#34c759','Uvoz izlaznih ra\u010duna','Smje\u0161taju se u prihode prema mjesecu datuma ra\u010duna');
-  h+=apDrop('izRacInput','list','#34c759','Povucite popis ra\u010duna ovdje','Popis ra\u010duna (Excel / CSV) ili pojedina\u010dni ra\u010dun (PDF)','.pdf,.xlsx,.xls,.csv',false,'parseIzlazniOdabirDatoteke(this)');
+  h+=apDrop('izRacInput','list','#34c759','Povucite popis ra\u010duna ovdje','Pojedina\u010dni ra\u010duni (XML e-Ra\u010dun, PDF) ili popis (Excel / CSV)<br>mo\u017ee i vi\u0161e datoteka odjednom','.xml,.pdf,.xlsx,.xls,.csv,text/xml,application/xml',true,'parseIzlazniOdabirDatoteke(this)');
   h+=apPaste('izPasteText','Ili zalijepite tablicu ra\u010duna','Kopirajte retke iz Excela ili programa za fakturiranje i zalijepite ovdje (sa zaglavljem)\u2026','Zaglavlje se prepoznaje samo. Obavezni su samo datum i iznos.');
   h+='<div class="ap-actions"><button class="ap-btn pri" onclick="parseIzlazniTablicu(document.getElementById(\'izPasteText\').value)">'+apSvg('bolt',15,2.2)+'<span>Analiziraj tablicu</span></button>'+
      '<label class="ap-seg-l">Knji\u017ei u <select id="izKnjiziU" class="ap-select"><option value="prihodi26">Prihodi grupe</option><option value="dnevni">Prodaja po danima</option></select></label></div>';
