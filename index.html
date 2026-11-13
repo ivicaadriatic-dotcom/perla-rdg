@@ -1206,7 +1206,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v163</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v165</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1338,7 +1338,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v164';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v165';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -7646,6 +7646,12 @@ function renderUlRacPreview() {
   });
 }
 
+// "12.11.2026" / "12.11." / "12. 11. 2026." → "12.11."
+function pnKratkiDatum(d){
+  var m=String(d||'').match(/(\d{1,2})\s*\.\s*(\d{1,2})\s*\./);
+  if (!m) return String(d||'').trim();
+  return ('0'+m[1]).slice(-2)+'.'+('0'+m[2]).slice(-2)+'.';
+}
 function potvrdiUlazneRacune() {
   var n=0, nDop=0, preskoceni=[];
   UL_RACUNI.forEach(function(r){
@@ -7670,7 +7676,11 @@ function potvrdiUlazneRacune() {
     var opis = r.ponuda
       ? (String(r.dobavljac||'').toUpperCase().replace(/\s+D\.?\s?O\.?\s?O\.?/i,' d.o.o.').trim()+' PONUDA BR:'+(r.brojPonude||'')+'-RN.BR:')
       : (r.dobavljac+(r.broj&&r.broj!=='\u2014'?' '+r.broj:''));
-    TD[r.kat][mo].push({datum:parts[0]+'.'+parts[1]+'.', iznos:r.iznos, tvrtka:opis, vpl:r.ponuda?'':(r.rok||''), placeno:''});
+    // Rok se sprema skraćeno (dd.mm.), kao i datum i kao svaki drugi redak u
+    // aplikaciji. Prije se upisivao cijeli "12.11.2026", pa je stupac Rok u
+    // jednom retku izgledao drugačije nego u svima ostalima.
+    var rokKratki = r.ponuda ? '' : pnKratkiDatum(r.rok);
+    TD[r.kat][mo].push({datum:parts[0]+'.'+parts[1]+'.', iznos:r.iznos, tvrtka:opis, vpl:rokKratki, placeno:''});
     syncTDtoP(r.kat);
     n++;
   });
@@ -8593,6 +8603,31 @@ function pnIspravakRubrika(){
 // Zatečena pravila: popravi ona s vodećom interpunkcijom, izbaci ona koja
 // nisu naziv partnera nego datum ili broj. Nastala su iz uvoza ulaznih računa,
 // gdje se dobavljač čita kao prvi redak PDF-a — a to zna biti datum zaglavlja.
+// Zatečeni retci kojima je rok upisan u punom obliku ("12.11.2026") skraćuju
+// se na "12.11.", da svi retci izgledaju i uspoređuju se jednako.
+function pnSkratiRokove(){
+  var FLAG='pn_vpl_kratki_1';
+  try { if (localStorage.getItem(FLAG)) return 0; } catch(e){}
+  var n=0;
+  for (var k in TD) {
+    if (!Object.prototype.hasOwnProperty.call(TD,k) || !TD[k]) continue;
+    for (var m=0;m<12;m++) {
+      var rows=TD[k][m]||[];
+      for (var i=0;i<rows.length;i++) {
+        var r=rows[i], v=String((r&&r.vpl)||'');
+        if (!v || !/\d{1,2}\s*\.\s*\d{1,2}\s*\.\s*\d{4}/.test(v)) continue;
+        r.vpl=pnKratkiDatum(v); n++;
+      }
+    }
+  }
+  if (n) {
+    try { localStorage.setItem('pn_td', JSON.stringify(TD)); } catch(e){}
+    if (typeof pnSyncOznaci==='function') pnSyncOznaci('pn_td');
+  }
+  try { localStorage.setItem(FLAG,'1'); } catch(e){}
+  return n;
+}
+
 function pnOcistiPravila(){
   var FLAG='pn_pravila_ocisti_1';
   try { if (localStorage.getItem(FLAG)) return null; } catch(e){}
@@ -8721,6 +8756,7 @@ function pnJednokratniIspravci(){
   try { pnIspravakPravila(); } catch(e){}
     try { pnIspravakRubrika(); } catch(e){}
     try {
+      try { pnSkratiRokove(); } catch(e){}
       var _oc=pnOcistiPravila();
       if (_oc && typeof pnAlert==='function') {
         pnAlert('Iz knjigovodstvenih pravila '+izvMn(_oc.length,'izba\u010deno je','izba\u010dena su','izba\u010deno je')+' '+_oc.length+' '+
