@@ -1338,7 +1338,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v163';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v164';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -3930,7 +3930,7 @@ function pnRijeci(t){
   return String(t||'').toLowerCase().replace(/[^a-z0-9šđčćž ]+/g,' ').split(/\s+/)
     .filter(function(w){ return w.length>3 && PN_STOP_RIJECI.indexOf(w)<0; });
 }
-function pnOcijeniPodudaranje(r, iznosAbs, opis){
+function pnOcijeniPodudaranje(r, iznosAbs, opis, datumIzvoda){
   var ost=pnOstatak(r), pun=parseFloat(r.iznos)||0, score=0, razlozi=[];
   var b1=pnBrojeviRacuna(opis), b2=pnBrojeviRacuna(r.tvrtka), pogodakBroj=false;
   b1.forEach(function(a){ b2.forEach(function(b){
@@ -3947,6 +3947,16 @@ function pnOcijeniPodudaranje(r, iznosAbs, opis){
   if (pnImaRate(r) && ost<=0.01) { score-=70; razlozi.push('već zatvoren ratama'); }
   else if (r.placeno && !r.izvod) { score+=15; razlozi.push('označen plaćenim, čeka izvod'); }
   else if (r.placeno && r.izvod) { score-=70; razlozi.push('već potvrđen izvodom'); }
+  // Datum izvoda blizu roka plaćanja (ili datuma računa) — jak dodatni signal
+  // kad opis izvoda ne sadrži naziv dobavljača (npr. generička bančina oznaka
+  // transakcije), inače samo poklapanje iznosa nikad ne prijeđe prag uparivanja.
+  if (datumIzvoda && ost>0.01) {
+    var dIzv=parseDMY(datumIzvoda), dRok=parseDMY(r.vpl)||parseDMY(r.datum);
+    if (dIzv && dRok) {
+      var dana=Math.abs(Math.round((dIzv.getTime()-dRok.getTime())/86400000));
+      if (dana<=10) { var bonus=Math.max(0,25-dana*2); score+=bonus; razlozi.push('datum blizu roka plaćanja'); }
+    }
+  }
   return {score:score, razlog:razlozi.join(' · '), ostatak:ost};
 }
 function pnSveStavke(){
@@ -3966,10 +3976,10 @@ function pnSveStavke(){
   });
   return out;
 }
-function pnKandidati(iznosAbs, opis){
+function pnKandidati(iznosAbs, opis, datumIzvoda){
   var out=[];
   pnSveStavke().forEach(function(s){
-    var o=pnOcijeniPodudaranje(s.r, iznosAbs, opis);
+    var o=pnOcijeniPodudaranje(s.r, iznosAbs, opis, datumIzvoda);
     if (o.score<=0) return;
     out.push({kat:s.kat, katLbl:s.katLbl, mo:s.mo, ri:s.ri, r:s.r, score:o.score, razlog:o.razlog, ostatak:o.ostatak});
   });
@@ -4718,7 +4728,7 @@ function izvodRedak(datum, iznos, opis){
 
   var naucenaKat=pravioZaPartnera(opis);
   var kat=naucenaKat||(iznos<0?'razno':'prihodi26');
-  var kandidati=pnKandidati(amtAbs, opis);
+  var kandidati=pnKandidati(amtAbs, opis, datum);
   var podudaranje=(kandidati.length && kandidati[0].score>=75) ? kandidati[0] : null;
   var _p={datum:datum, opis:opis||'(bez opisa)', iznos:iznos};
   var _evid=pnVecEvidentirano(datum, amtAbs);
