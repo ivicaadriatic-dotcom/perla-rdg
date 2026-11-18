@@ -1206,7 +1206,7 @@ body.mob .mob-brand{gap:0}
     </div>
   </div>
   <div id="nav"></div>
-  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v165</span></div>
+  <div class="side-f">&#169; Perla Note 2026 &middot; <span id="verOznaka">v166</span></div>
 </div>
 <div id="main">
 <div id="sideOverlay" onclick="toggleSidebar()"></div>
@@ -1338,7 +1338,7 @@ if (typeof Chart !== 'undefined') {
 // ═══════════════════════════════════════════
 // GLOBALS
 // ═══════════════════════════════════════════
-var PN_VERZIJA = 'v165';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
+var PN_VERZIJA = 'v166';   // \u2190 podi\u0107i uz svaku novu inacicu (mora se slagati s VERZIJA u sw.js)
 var MONTHS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 var MNAMES = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
@@ -3514,6 +3514,10 @@ function renderRadniSati() {
     var col = dn===5?'var(--orange)':dn===6?'var(--red)':'var(--label3)';
     h+='<div style="font-size:10px;font-weight:700;text-align:center;color:'+col+'">'+dayNames[dn]+'</div>';
   }
+  var rsBlag = (typeof rsBlagdaniHR==='function') ? rsBlagdaniHR(y) : {};
+  // Nazivi su naši i poznati, ali svejedno idu kroz čišćenje — `esc` ovdje nije
+  // dostupan jer je lokalna varijabla u drugoj funkciji.
+  var rsCist=function(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); };
   // prazne celije prije 1.
   for (var pe=0;pe<startWeekday;pe++) h+='<div></div>';
   var todayStr=realNow.getFullYear()+'-'+String(realNow.getMonth()+1).padStart(2,'0')+'-'+String(realNow.getDate()).padStart(2,'0');
@@ -3521,10 +3525,21 @@ function renderRadniSati() {
     var dateStr=y+'-'+String(m+1).padStart(2,'0')+'-'+String(day).padStart(2,'0');
     var dayEntries=entriesThisMonth.filter(function(e){return e.datum===dateStr;});
     var dow=(startWeekday+day-1)%7;
-    var bg = dayEntries.length ? 'rgba(34,197,94,.08)' : (dow===5?'rgba(245,158,11,.06)':dow===6?'rgba(239,68,68,.05)':'var(--surface2)');
-    var border = dateStr===todayStr ? '1.5px solid var(--nav-500)' : '1px solid var(--sep2)';
-    h+='<div style="min-height:64px;border-radius:8px;padding:5px 6px;background:'+bg+';border:'+border+';cursor:pointer;position:relative" onclick="unosSatiForma(\''+dateStr+'\')">';
-    h+='<div style="font-size:11px;font-weight:600;color:var(--label2);margin-bottom:3px">'+day+'</div>';
+    var praznik = rsBlag[m+'-'+day] || null;
+    // Blagdan se boji kao nedjelja i kad pada usred tjedna; unosi (zeleno) ostaju
+    // jači, da se vidi da je toga dana netko ipak radio.
+    var bg = dayEntries.length ? 'rgba(34,197,94,.08)'
+           : praznik ? 'rgba(239,68,68,.10)'
+           : (dow===5?'rgba(245,158,11,.06)':dow===6?'rgba(239,68,68,.05)':'var(--surface2)');
+    var border = dateStr===todayStr ? '1.5px solid var(--nav-500)'
+               : praznik ? '1px solid rgba(239,68,68,.35)' : '1px solid var(--sep2)';
+    h+='<div style="min-height:64px;border-radius:8px;padding:5px 6px;background:'+bg+';border:'+border+';cursor:pointer;position:relative"'+
+       (praznik?' title="'+rsCist(praznik.p)+'"':'')+' onclick="unosSatiForma(\''+dateStr+'\')">';
+    h+='<div style="font-size:11px;font-weight:600;color:'+(praznik?'var(--red)':'var(--label2)')+';margin-bottom:3px">'+day+'</div>';
+    if (praznik) {
+      h+='<div style="font-size:8.5px;line-height:1.15;font-weight:700;color:var(--red);margin-bottom:3px;'+
+         'overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">'+rsCist(praznik.k)+'</div>';
+    }
     for (var de=0;de<dayEntries.length;de++) {
       h+='<div style="font-size:9.5px;color:var(--green);font-weight:700;cursor:pointer" onclick="event.stopPropagation();unosSatiForma(null,\''+dayEntries[de].id+'\')" title="Klik za ure\u0111ivanje">'+dayEntries[de].sati.toFixed(1)+'h<br><span style="font-weight:400;color:var(--label3)">'+dayEntries[de].ime.split(' ')[0]+'</span></div>';
     }
@@ -8875,14 +8890,33 @@ var RS_STUPCI = [
 var HR_DANI_KR = ['Pon','Uto','Sri','\u010cet','Pet','Sub','Ned'];
 var HR_MJESECI = ['Sije\u010danj','Velja\u010da','O\u017eujak','Travanj','Svibanj','Lipanj','Srpanj','Kolovoz','Rujan','Listopad','Studeni','Prosinac'];
 
+// Hrvatski blagdani i neradni dani. Vraća {'mjesec-dan': {k:kratko, p:puno}}.
+// Vrijednost je objekt, ali svaka provjera i dalje radi kao prije jer je objekt
+// istinit — izvoz u Excel koristi `!!blagdani[kljuc]`.
 function rsBlagdaniHR(y) {
   // Uskrs (Meeus/Jones/Butcher)
   var a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),
       h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,mm=Math.floor((a+11*h+22*l)/451),
       em=Math.floor((h+l-7*mm+114)/31)-1,ed=((h+l-7*mm+114)%31)+1;
-  var set={}; var add=function(dt){ set[dt.getMonth()+'-'+dt.getDate()]=true; };
-  [[0,1],[0,6],[4,1],[4,30],[5,22],[7,5],[7,15],[10,1],[10,18],[11,25],[11,26]].forEach(function(p){ add(new Date(y,p[0],p[1])); });
-  add(new Date(y,em,ed)); add(new Date(y,em,ed+1)); add(new Date(y,em,ed+60));
+  var set={};
+  var add=function(dt, kratko, puno){ set[dt.getMonth()+'-'+dt.getDate()]={k:kratko, p:puno||kratko}; };
+  var FIKSNI=[
+    [0,1,  'Nova godina',          'Nova godina'],
+    [0,6,  'Sveta tri kralja',     'Bogojavljenje — Sveta tri kralja'],
+    [4,1,  'Praznik rada',         'Praznik rada'],
+    [4,30, 'Dan državnosti',       'Dan državnosti'],
+    [5,22, 'Dan antifaš. borbe',   'Dan antifašističke borbe'],
+    [7,5,  'Dan pobjede',          'Dan pobjede i domovinske zahvalnosti i Dan hrvatskih branitelja'],
+    [7,15, 'Velika Gospa',         'Velika Gospa'],
+    [10,1, 'Svi sveti',            'Svi sveti'],
+    [10,18,'Dan sjećanja',         'Dan sjećanja na žrtve Domovinskog rata i Dan sjećanja na žrtvu Vukovara i Škabrnje'],
+    [11,25,'Božić',               'Božić'],
+    [11,26,'Sveti Stjepan',        'Sveti Stjepan']
+  ];
+  FIKSNI.forEach(function(p){ add(new Date(y,p[0],p[1]), p[2], p[3]); });
+  add(new Date(y,em,ed),    'Uskrs',              'Uskrs');
+  add(new Date(y,em,ed+1),  'Uskrsni ponedjeljak','Uskrsni ponedjeljak');
+  add(new Date(y,em,ed+60), 'Tijelovo',           'Tijelovo');
   return set;
 }
 
